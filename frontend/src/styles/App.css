@@ -884,18 +884,23 @@
    ============================================================ */
 .settings-page {
   animation: fadeInUp 400ms ease-out both;
-  max-width: 800px;
+  max-width: 960px;
 }
 
-.settings-page h2 {
+.settings-header {
+  margin-bottom: 28px;
+}
+
+.settings-header h2 {
   font-size: 24px;
   font-weight: 700;
   color: var(--text-primary);
-  margin-bottom: 24px;
+  margin-bottom: 4px;
 }
 
 .settings-card {
   margin-bottom: 20px;
+  border-radius: var(--radius-lg);
 }
 
 .settings-card .ant-card-head {
@@ -907,6 +912,16 @@
   align-items: center;
   gap: 10px;
   font-weight: 600;
+}
+
+.settings-card .ant-collapse-header {
+  font-weight: 600 !important;
+  font-size: 14px;
+  padding: 10px 0 !important;
+}
+
+.settings-card .ant-collapse-content-box {
+  padding: 4px 0 0 !important;
 }
 
 .settings-about {
