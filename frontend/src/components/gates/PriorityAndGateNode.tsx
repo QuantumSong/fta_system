@@ -3,7 +3,7 @@ import { Handle, Position } from '@xyflow/react'
 import NodeResizeWrapper from '@/components/common/NodeResizeWrapper'
 
 interface PriorityAndGateNodeProps {
-  data: { label?: string; nodeWidth?: number; nodeHeight?: number; onSizeChange?: (w: number, h: number) => void }
+  data: { label?: string; nodeWidth?: number; nodeHeight?: number; onSizeChange?: (w: number, h: number) => void; evidenceLevel?: string }
   selected?: boolean
 }
 
@@ -11,7 +11,7 @@ const DEF = 50
 
 const PriorityAndGateNode: React.FC<PriorityAndGateNodeProps> = ({ data, selected }) => {
   return (
-    <NodeResizeWrapper selected={selected} width={data.nodeWidth || DEF} height={data.nodeHeight || DEF} minWidth={36} minHeight={36} onSizeChange={data.onSizeChange}>
+    <NodeResizeWrapper selected={selected} width={data.nodeWidth || DEF} height={data.nodeHeight || DEF} minWidth={36} minHeight={36} onSizeChange={data.onSizeChange} evidenceLevel={data.evidenceLevel}>
       {({ width, height }) => (
         <div
           className="fta-gate-wrap"

@@ -196,33 +196,51 @@
 }
 
 .fta-editor-toolbar {
-  padding: 10px 20px;
+  padding: 6px 12px;
   background: var(--bg-card);
   border-bottom: 1px solid var(--border-light);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px;
+  flex-wrap: nowrap;
+  gap: 6px;
   backdrop-filter: blur(8px);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  min-height: 42px;
+}
+
+.fta-editor-toolbar::-webkit-scrollbar {
+  height: 3px;
+}
+.fta-editor-toolbar::-webkit-scrollbar-thumb {
+  background: rgba(0,0,0,0.12);
+  border-radius: 3px;
 }
 
 .fta-editor-toolbar .ant-btn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  font-size: 13px;
+  gap: 3px;
+  font-size: 12px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  padding: 0 8px;
+  height: 28px;
 }
 
 .fta-editor-toolbar .ant-space {
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
 }
 
 .toolbar-divider {
   width: 1px;
-  height: 24px;
+  height: 20px;
   background: var(--border-light);
-  margin: 0 4px;
+  margin: 0 2px;
+  flex-shrink: 0;
 }
 
 .fta-editor-body {
@@ -252,7 +270,8 @@
 }
 
 .fta-palette-collapsed {
-  width: 42px;
+  width: 0;
+  border-right: none;
 }
 
 .fta-palette-header {
@@ -268,8 +287,36 @@
   overflow: hidden;
 }
 
-.fta-palette-collapsed .fta-palette-header span:first-child {
+.fta-palette-collapsed .fta-palette-header {
   display: none;
+}
+
+.fta-palette-expand-btn {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 20;
+  width: 24px;
+  height: 56px;
+  border-radius: 0 8px 8px 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-left: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--primary);
+  font-size: 14px;
+  box-shadow: 2px 0 8px rgba(0,0,0,0.06);
+  transition: all 200ms ease;
+}
+.fta-palette-expand-btn:hover {
+  width: 30px;
+  background: var(--primary);
+  color: #fff;
+  box-shadow: 2px 0 12px rgba(99,102,241,0.3);
 }
 
 .fta-palette-content {

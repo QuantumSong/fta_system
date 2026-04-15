@@ -3,7 +3,7 @@ import { Handle, Position } from '@xyflow/react'
 import NodeResizeWrapper from '@/components/common/NodeResizeWrapper'
 
 interface NotGateNodeProps {
-  data: { label?: string; nodeWidth?: number; nodeHeight?: number; onSizeChange?: (w: number, h: number) => void }
+  data: { label?: string; nodeWidth?: number; nodeHeight?: number; onSizeChange?: (w: number, h: number) => void; evidenceLevel?: string }
   selected?: boolean
 }
 
@@ -12,7 +12,7 @@ const DEF_H = 54
 
 const NotGateNode: React.FC<NotGateNodeProps> = ({ data, selected }) => {
   return (
-    <NodeResizeWrapper selected={selected} width={data.nodeWidth || DEF_W} height={data.nodeHeight || DEF_H} minWidth={36} minHeight={40} onSizeChange={data.onSizeChange}>
+    <NodeResizeWrapper selected={selected} width={data.nodeWidth || DEF_W} height={data.nodeHeight || DEF_H} minWidth={36} minHeight={40} onSizeChange={data.onSizeChange} evidenceLevel={data.evidenceLevel}>
       {({ width, height }) => (
         <div
           className="fta-gate-wrap"

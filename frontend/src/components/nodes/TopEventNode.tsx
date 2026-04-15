@@ -12,6 +12,7 @@ interface TopEventNodeProps {
     nodeWidth?: number
     nodeHeight?: number
     onSizeChange?: (w: number, h: number) => void
+    evidenceLevel?: string
   }
   selected?: boolean
 }
@@ -66,6 +67,7 @@ const TopEventNode: React.FC<TopEventNodeProps> = ({ data, selected }) => {
       minWidth={80}
       minHeight={36}
       onSizeChange={data.onSizeChange}
+      evidenceLevel={data.evidenceLevel}
     >
       {({ width, height }) => (
         <div

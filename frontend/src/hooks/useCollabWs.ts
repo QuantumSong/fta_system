@@ -32,19 +32,34 @@ export default function useCollabWs({
   const [onlineCount, setOnlineCount] = useState(0)
   const [connected, setConnected] = useState(false)
 
-  // Store callbacks in refs so connect() doesn't depend on them
+  // Store callbacks and username in refs so connect() doesn't depend on them
   const onTreeUpdateRef = useRef(onTreeUpdate)
   const onUserJoinRef = useRef(onUserJoin)
   const onUserLeaveRef = useRef(onUserLeave)
+  const usernameRef = useRef(username)
   onTreeUpdateRef.current = onTreeUpdate
   onUserJoinRef.current = onUserJoin
   onUserLeaveRef.current = onUserLeave
+  usernameRef.current = username
 
   // Flag to prevent onclose from reconnecting during intentional cleanup
   const intentionalCloseRef = useRef(false)
+  // Track which room we're connected to, to avoid redundant reconnects
+  const connectedRoomRef = useRef<string | null>(null)
 
   const connect = useCallback(() => {
     if (!projectId || !token) return
+
+    const roomKey = `${projectId}::${token}`
+
+    // Skip if already connected to same room
+    if (
+      wsRef.current &&
+      wsRef.current.readyState === WebSocket.OPEN &&
+      connectedRoomRef.current === roomKey
+    ) {
+      return
+    }
 
     // Close existing connection first
     if (wsRef.current) {
@@ -54,11 +69,12 @@ export default function useCollabWs({
     }
 
     intentionalCloseRef.current = false
+    connectedRoomRef.current = roomKey
 
     // Build ws url relative to current host
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const host = window.location.host
-    const url = `${protocol}//${host}/ws/collab/${projectId}?token=${token}&username=${encodeURIComponent(username)}`
+    const url = `${protocol}//${host}/ws/collab/${projectId}?token=${token}&username=${encodeURIComponent(usernameRef.current)}`
 
     const ws = new WebSocket(url)
     wsRef.current = ws
@@ -92,6 +108,7 @@ export default function useCollabWs({
 
     ws.onclose = () => {
       setConnected(false)
+      connectedRoomRef.current = null
       // Only auto-reconnect if the close was NOT intentional
       if (!intentionalCloseRef.current) {
         reconnectTimer.current = setTimeout(() => {
@@ -103,13 +120,14 @@ export default function useCollabWs({
     ws.onerror = () => {
       ws.close()
     }
-  }, [projectId, token, username])
+  }, [projectId, token])
 
   useEffect(() => {
     connect()
     return () => {
       // Mark as intentional close so onclose won't schedule reconnect
       intentionalCloseRef.current = true
+      connectedRoomRef.current = null
       clearTimeout(reconnectTimer.current)
       wsRef.current?.close()
       wsRef.current = null

@@ -69,7 +69,7 @@ app.add_middleware(
 )
 
 # 注册路由
-from api.v1 import documents, extraction, fta, validation, projects, knowledge, auth, collaboration, ws
+from api.v1 import documents, extraction, fta, validation, projects, knowledge, auth, collaboration, ws, multidoc, expert, benchmark, demo_seed
 
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["认证"])
 app.include_router(documents.router, prefix="/api/v1/documents", tags=["文档管理"])
@@ -80,6 +80,18 @@ app.include_router(projects.router, prefix="/api/v1/projects", tags=["项目管�
 app.include_router(knowledge.router, prefix="/api/v1/knowledge", tags=["知识图谱"])
 app.include_router(collaboration.router, prefix="/api/v1", tags=["协同工作"])
 app.include_router(ws.router, tags=["WebSocket"])
+app.include_router(multidoc.router, prefix="/api/v1/multidoc", tags=["多文档联合建树"])
+app.include_router(expert.router, prefix="/api/v1/expert-rules", tags=["专家模式"])
+app.include_router(benchmark.router, prefix="/api/v1/benchmark", tags=["指标评测"])
+app.include_router(demo_seed.router, prefix="/api/v1/demo", tags=["演示数据"])
+
+
+# ---- Schema 查询端点（无需认证，供前端缓存） ----
+@app.get("/api/v1/schema", tags=["工业Schema"])
+async def get_industrial_schema():
+    """返回工业知识专用 Schema 定义"""
+    from schemas.fta_schema import get_schema_summary
+    return get_schema_summary()
 
 
 @app.get("/")

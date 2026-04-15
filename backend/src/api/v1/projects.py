@@ -3,12 +3,16 @@
 """
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func as sa_func, or_
+from sqlalchemy import select, delete as sa_delete, update as sa_update, func as sa_func, or_
 from typing import Optional
 from pydantic import BaseModel
 
 from models.database import get_db
-from models.models import Project, FaultTree, User, ProjectCollaboration
+from models.models import (
+    Project, FaultTree, FaultTreeVersion, User, ProjectCollaboration,
+    Document, DocumentChunk, ExtractionRecord, KnowledgeEntity, KnowledgeRelation,
+    BuildTemplate, ExpertRule, GoldTree, EvalRun,
+)
 from core.auth import get_current_user
 
 router = APIRouter()
@@ -198,6 +202,46 @@ async def delete_project(
     if db_project.owner_id and db_project.owner_id != user.id and user.role != "admin":
         raise HTTPException(status_code=403, detail="无权限删除此项目")
 
-    await db.delete(db_project)
-    await db.commit()
-    return {"message": "删除成功"}
+    try:
+        # 将已加载的 ORM 对象踢出 session，避免 cascade 冲突
+        await db.refresh(db_project)
+        db.expunge(db_project)
+
+        # 收集将被删除的子表 ID
+        tree_ids_q = select(FaultTree.id).where(FaultTree.project_id == project_id)
+        gold_ids_q = select(GoldTree.id).where(GoldTree.project_id == project_id)
+        doc_ids_q = select(Document.id).where(Document.project_id == project_id)
+
+        # 1) EvalRun: 删除本项目的 + 断开其他项目对本项目树的引用
+        await db.execute(sa_delete(EvalRun).where(EvalRun.project_id == project_id))
+        await db.execute(sa_delete(EvalRun).where(EvalRun.gold_tree_id.in_(gold_ids_q)))
+        await db.execute(sa_update(EvalRun).where(EvalRun.generated_tree_id.in_(tree_ids_q)).values(generated_tree_id=None))
+
+        # 2) GoldTree, ExpertRule, BuildTemplate
+        await db.execute(sa_delete(GoldTree).where(GoldTree.project_id == project_id))
+        await db.execute(sa_delete(ExpertRule).where(ExpertRule.project_id == project_id))
+        await db.execute(sa_delete(BuildTemplate).where(BuildTemplate.project_id == project_id))
+
+        # 3) Knowledge
+        await db.execute(sa_delete(KnowledgeRelation).where(KnowledgeRelation.project_id == project_id))
+        await db.execute(sa_delete(KnowledgeEntity).where(KnowledgeEntity.project_id == project_id))
+
+        # 4) DocumentChunk, ExtractionRecord
+        await db.execute(sa_delete(DocumentChunk).where(DocumentChunk.project_id == project_id))
+        await db.execute(sa_delete(ExtractionRecord).where(ExtractionRecord.document_id.in_(doc_ids_q)))
+
+        # 5) FaultTreeVersion → FaultTree, Document
+        await db.execute(sa_delete(FaultTreeVersion).where(FaultTreeVersion.fault_tree_id.in_(tree_ids_q)))
+        await db.execute(sa_delete(FaultTree).where(FaultTree.project_id == project_id))
+        await db.execute(sa_delete(Document).where(Document.project_id == project_id))
+
+        # 6) ProjectCollaboration → Project
+        await db.execute(sa_delete(ProjectCollaboration).where(ProjectCollaboration.project_id == project_id))
+
+        # 最后删除项目本体（用 SQL 而非 ORM 的 db.delete 避免 cascade 冲突）
+        await db.execute(sa_delete(Project).where(Project.id == project_id))
+        await db.commit()
+        return {"message": "删除成功"}
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"删除失败: {str(e)}")

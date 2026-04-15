@@ -108,12 +108,19 @@ class FTAGenerator:
 
             ent_lines = []
             for e in kg_entities:
-                ent_lines.append(f"  - {e['name']} ({e['type']}): {e.get('description', '')}")
+                extras = []
+                if e.get("fault_code"): extras.append(f"故障代码:{e['fault_code']}")
+                if e.get("fault_mode"): extras.append(f"故障模式:{e['fault_mode']}")
+                if e.get("severity"): extras.append(f"严重度:{e['severity']}")
+                if e.get("detection_method"): extras.append(f"检测:{e['detection_method']}")
+                extra_str = f" [{', '.join(extras)}]" if extras else ""
+                ent_lines.append(f"  - {e['name']} ({e['type']}): {e.get('description', '')}{extra_str}")
 
             rel_lines = []
             for r in kg_relations:
                 gate_info = f" [{r['logic_gate']}门]" if r.get("logic_gate") else ""
-                rel_lines.append(f"  - {r['source_name']} --[{r['type']}{gate_info}]--> {r['target_name']}")
+                cond = f" 条件:{r['condition']}" if r.get("condition") else ""
+                rel_lines.append(f"  - {r['source_name']} --[{r['type']}{gate_info}]--> {r['target_name']}{cond}")
 
             sections.append(f"""
 【知识图谱参考（从工业文档中抽取的领域知识）】
@@ -154,6 +161,7 @@ class FTAGenerator:
 4. 最大深度: {max_depth} 层
 5. 每个中间事件下面应该有一个逻辑门（AND或OR），逻辑门下面连接子事件
 6. 底事件是最基本的故障原因，不再细分
+7. 对每个事件节点，尽可能填写工业元数据字段（见输出格式）
 
 【输出格式】
 请输出JSON格式：
@@ -164,7 +172,15 @@ class FTAGenerator:
             "type": "节点类型(topEvent/middleEvent/basicEvent/andGate/orGate/xorGate/priorityAndGate/inhibitGate/votingGate)",
             "name": "节点名称",
             "description": "描述(可选)",
-            "probability": 概率值(可选, 0-1, 仅底事件需要)
+            "probability": "概率值(0-1, 仅底事件)",
+            "fault_code": "故障代码(可选)",
+            "fault_mode": "故障模式(可选)",
+            "severity": "catastrophic/hazardous/major/minor/no_effect(可选)",
+            "detection_method": "检测方式(可选)",
+            "parameter_name": "监控参数名(可选)",
+            "parameter_range": "参数正常范围(可选)",
+            "maintenance_ref": "AMM/TSM参考章节(可选)",
+            "evidence_level": "direct/inferred/assumed(可选)"
         }}
     ],
     "links": [
@@ -180,6 +196,8 @@ class FTAGenerator:
 - 顶事件连接到逻辑门，逻辑门连接到子事件
 - 确保生成至少10个节点的完整故障树
 - 只输出JSON，不要有其他内容
+- 尽可能为底事件填写 fault_code、fault_mode、severity、detection_method 等字段
+- 文本中未提及的可选字段可省略
 """)
 
         return "\n".join(sections)
@@ -289,6 +307,12 @@ class FTAGenerator:
                 rf_node["data"]["description"] = n["description"]
             if n.get("probability") is not None:
                 rf_node["data"]["probability"] = n["probability"]
+            # 工业 schema 元数据
+            for field in ("fault_code", "fault_mode", "severity", "detection_method",
+                          "parameter_name", "parameter_range", "maintenance_ref", "evidence_level"):
+                val = n.get(field)
+                if val:
+                    rf_node["data"][field] = val
 
             rf_nodes.append(rf_node)
 

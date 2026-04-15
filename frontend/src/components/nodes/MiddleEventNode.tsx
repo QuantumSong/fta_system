@@ -12,6 +12,7 @@ interface MiddleEventNodeProps {
     nodeWidth?: number
     nodeHeight?: number
     onSizeChange?: (w: number, h: number) => void
+    evidenceLevel?: string
   }
   selected?: boolean
 }
@@ -54,7 +55,7 @@ const MiddleEventNode: React.FC<MiddleEventNodeProps> = ({ data, selected }) => 
   }
 
   return (
-    <NodeResizeWrapper selected={selected} width={data.nodeWidth || DEF_W} height={data.nodeHeight || DEF_H} minWidth={80} minHeight={36} onSizeChange={data.onSizeChange}>
+    <NodeResizeWrapper selected={selected} width={data.nodeWidth || DEF_W} height={data.nodeHeight || DEF_H} minWidth={80} minHeight={36} onSizeChange={data.onSizeChange} evidenceLevel={data.evidenceLevel}>
       {({ width, height }) => (
         <div
           className="fta-node fta-node-middle"

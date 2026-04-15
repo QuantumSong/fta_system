@@ -21,6 +21,14 @@ class EntityCreate(BaseModel):
     device_type: Optional[str] = None
     confidence: float = 1.0
     project_id: Optional[int] = None
+    fault_code: Optional[str] = None
+    fault_mode: Optional[str] = None
+    severity: Optional[str] = None
+    detection_method: Optional[str] = None
+    parameter_name: Optional[str] = None
+    parameter_range: Optional[str] = None
+    maintenance_ref: Optional[str] = None
+    evidence_level: Optional[str] = None
 
 
 class RelationCreate(BaseModel):
@@ -30,17 +38,20 @@ class RelationCreate(BaseModel):
     logic_gate: Optional[str] = None
     confidence: float = 1.0
     project_id: Optional[int] = None
+    condition: Optional[str] = None
+    parameters: Optional[dict] = None
 
 
 @router.get("/entities/search")
 async def search_entities(
     q: str = "*",
     entity_type: Optional[str] = None,
-    limit: int = 20,
+    project_id: Optional[int] = None,
+    limit: int = 200,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """搜索实体"""
+    """搜索实体（支持按项目筛选）"""
     query = select(KnowledgeEntity)
 
     if q and q != "*":
@@ -54,7 +65,10 @@ async def search_entities(
     if entity_type:
         query = query.where(KnowledgeEntity.entity_type == entity_type)
 
-    query = query.limit(limit)
+    if project_id is not None:
+        query = query.where(KnowledgeEntity.project_id == project_id)
+
+    query = query.order_by(KnowledgeEntity.id.desc()).limit(limit)
     result = await db.execute(query)
     entities = result.scalars().all()
 
@@ -67,6 +81,16 @@ async def search_entities(
                 "description": e.description,
                 "device_type": e.device_type,
                 "confidence": e.confidence,
+                "project_id": e.project_id,
+                "source_document_id": e.source_document_id,
+                "fault_code": e.fault_code,
+                "fault_mode": e.fault_mode,
+                "severity": e.severity,
+                "detection_method": e.detection_method,
+                "parameter_name": e.parameter_name,
+                "parameter_range": e.parameter_range,
+                "maintenance_ref": e.maintenance_ref,
+                "evidence_level": e.evidence_level,
             }
             for e in entities
         ],
@@ -106,6 +130,14 @@ async def get_entity(
         "description": entity.description,
         "device_type": entity.device_type,
         "confidence": entity.confidence,
+        "fault_code": entity.fault_code,
+        "fault_mode": entity.fault_mode,
+        "severity": entity.severity,
+        "detection_method": entity.detection_method,
+        "parameter_name": entity.parameter_name,
+        "parameter_range": entity.parameter_range,
+        "maintenance_ref": entity.maintenance_ref,
+        "evidence_level": entity.evidence_level,
         "relations": [
             {
                 "id": r.id,
@@ -113,6 +145,7 @@ async def get_entity(
                 "target_entity_id": r.target_entity_id,
                 "type": r.relation_type,
                 "confidence": r.confidence,
+                "condition": r.condition,
             }
             for r in relations
         ]
@@ -167,6 +200,14 @@ async def create_entity(
         device_type=entity.device_type,
         confidence=entity.confidence,
         project_id=entity.project_id,
+        fault_code=entity.fault_code,
+        fault_mode=entity.fault_mode,
+        severity=entity.severity,
+        detection_method=entity.detection_method,
+        parameter_name=entity.parameter_name,
+        parameter_range=entity.parameter_range,
+        maintenance_ref=entity.maintenance_ref,
+        evidence_level=entity.evidence_level,
     )
     db.add(db_entity)
     await db.commit()
@@ -188,12 +229,59 @@ async def create_relation(
         relation_type=relation.relation_type,
         confidence=relation.confidence,
         project_id=relation.project_id,
+        condition=relation.condition,
+        parameters=relation.parameters,
     )
     db.add(db_relation)
     await db.commit()
     await db.refresh(db_relation)
 
     return {"id": db_relation.id, "message": "创建成功"}
+
+
+class EntityUpdate(BaseModel):
+    name: Optional[str] = None
+    entity_type: Optional[str] = None
+    description: Optional[str] = None
+    device_type: Optional[str] = None
+    confidence: Optional[float] = None
+    fault_code: Optional[str] = None
+    fault_mode: Optional[str] = None
+    severity: Optional[str] = None
+    detection_method: Optional[str] = None
+    parameter_name: Optional[str] = None
+    parameter_range: Optional[str] = None
+    maintenance_ref: Optional[str] = None
+    evidence_level: Optional[str] = None
+
+
+@router.put("/entities/{entity_id}")
+async def update_entity(
+    entity_id: int,
+    data: EntityUpdate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """更新实体"""
+    result = await db.execute(
+        select(KnowledgeEntity).where(KnowledgeEntity.id == entity_id)
+    )
+    entity = result.scalar_one_or_none()
+    if not entity:
+        raise HTTPException(status_code=404, detail="实体不存在")
+
+    for field in [
+        "name", "entity_type", "description", "device_type", "confidence",
+        "fault_code", "fault_mode", "severity", "detection_method",
+        "parameter_name", "parameter_range", "maintenance_ref", "evidence_level",
+    ]:
+        val = getattr(data, field, None)
+        if val is not None:
+            setattr(entity, field, val)
+
+    await db.commit()
+    await db.refresh(entity)
+    return {"id": entity.id, "message": "更新成功"}
 
 
 @router.delete("/entities/{entity_id}")
@@ -271,6 +359,14 @@ async def get_knowledge_graph(
                 "description": e.description or "",
                 "device_type": e.device_type or "",
                 "confidence": e.confidence,
+                "fault_code": e.fault_code or "",
+                "fault_mode": e.fault_mode or "",
+                "severity": e.severity or "",
+                "detection_method": e.detection_method or "",
+                "parameter_name": e.parameter_name or "",
+                "parameter_range": e.parameter_range or "",
+                "maintenance_ref": e.maintenance_ref or "",
+                "evidence_level": e.evidence_level or "",
             }
             for e in entities
         ],
@@ -283,6 +379,7 @@ async def get_knowledge_graph(
                 "logic_gate": r.logic_gate,
                 "confidence": r.confidence,
                 "evidence": r.evidence or "",
+                "condition": r.condition or "",
             }
             for r in relations
         ],

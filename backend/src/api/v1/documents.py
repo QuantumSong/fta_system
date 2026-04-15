@@ -9,7 +9,7 @@ from sqlalchemy import select, func as sa_func
 from typing import Optional
 
 from models.database import get_db
-from models.models import Document, User
+from models.models import Document, DocumentChunk, User
 from config import settings
 from core.auth import get_current_user
 
@@ -49,6 +49,10 @@ async def get_documents(
                 "doc_type": d.doc_type,
                 "extraction_status": d.extraction_status,
                 "uploaded_at": d.uploaded_at.isoformat() if d.uploaded_at else None,
+                "tags": d.tags,
+                "device_model": d.device_model,
+                "source_level": d.source_level,
+                "trust_level": d.trust_level,
             }
             for d in documents
         ],
@@ -138,17 +142,59 @@ async def get_document(
     }
 
 
+@router.put("/{document_id}")
+async def update_document(
+    document_id: int,
+    data: dict,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """更新文档信息（文件名、标签、设备型号、来源级别、可信度）"""
+    result = await db.execute(select(Document).where(Document.id == document_id))
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="文档不存在")
+
+    if "filename" in data and data["filename"]:
+        doc.filename = data["filename"]
+    if "tags" in data:
+        doc.tags = data["tags"]
+    if "device_model" in data:
+        doc.device_model = data["device_model"]
+    if "source_level" in data:
+        doc.source_level = data["source_level"]
+    if "trust_level" in data:
+        doc.trust_level = max(0.0, min(1.0, float(data["trust_level"]))) if data["trust_level"] is not None else None
+
+    await db.commit()
+    await db.refresh(doc)
+
+    return {
+        "id": doc.id,
+        "filename": doc.filename,
+        "tags": doc.tags,
+        "device_model": doc.device_model,
+        "source_level": doc.source_level,
+        "trust_level": doc.trust_level,
+        "message": "更新成功",
+    }
+
+
 @router.delete("/{document_id}")
 async def delete_document(
     document_id: int,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """删除文档"""
+    """删除文档及其关联的分块数据"""
     result = await db.execute(select(Document).where(Document.id == document_id))
     doc = result.scalar_one_or_none()
     if not doc:
         raise HTTPException(status_code=404, detail="文档不存在")
+
+    # 删除关联的文档分块
+    from sqlalchemy import delete as sql_delete
+    await db.execute(sql_delete(DocumentChunk).where(DocumentChunk.document_id == document_id))
 
     # 删除磁盘文件
     if doc.file_path and os.path.exists(doc.file_path):
@@ -157,3 +203,38 @@ async def delete_document(
     await db.delete(doc)
     await db.commit()
     return {"message": "删除成功"}
+
+
+@router.get("/{document_id}/chunks")
+async def get_document_chunks(
+    document_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """获取文档的所有分块"""
+    result = await db.execute(select(Document).where(Document.id == document_id))
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="文档不存在")
+
+    chunk_result = await db.execute(
+        select(DocumentChunk)
+        .where(DocumentChunk.document_id == document_id)
+        .order_by(DocumentChunk.chunk_index)
+    )
+    chunks = chunk_result.scalars().all()
+
+    return {
+        "document_id": document_id,
+        "filename": doc.filename,
+        "chunks": [
+            {
+                "id": c.id,
+                "chunk_index": c.chunk_index,
+                "content": c.content,
+                "chunk_type": c.chunk_type,
+                "metadata": c.metadata_,
+            }
+            for c in chunks
+        ],
+    }

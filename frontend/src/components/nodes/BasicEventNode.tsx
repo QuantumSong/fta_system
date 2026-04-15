@@ -12,6 +12,7 @@ interface BasicEventNodeProps {
     nodeWidth?: number
     nodeHeight?: number
     onSizeChange?: (w: number, h: number) => void
+    evidenceLevel?: string
   }
   selected?: boolean
 }
@@ -53,7 +54,7 @@ const BasicEventNode: React.FC<BasicEventNodeProps> = ({ data, selected }) => {
   }
 
   return (
-    <NodeResizeWrapper selected={selected} width={data.nodeWidth || DEF_S} height={data.nodeHeight || DEF_S} minWidth={50} minHeight={50} onSizeChange={data.onSizeChange}>
+    <NodeResizeWrapper selected={selected} width={data.nodeWidth || DEF_S} height={data.nodeHeight || DEF_S} minWidth={50} minHeight={50} onSizeChange={data.onSizeChange} evidenceLevel={data.evidenceLevel}>
       {({ width, height }) => (
         <div
           className="fta-node fta-node-basic fta-node-svg-shape"

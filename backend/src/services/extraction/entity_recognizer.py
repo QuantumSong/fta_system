@@ -45,7 +45,7 @@ class FTAEntity:
 class EntityRecognizer:
     """实体识别器"""
     
-    # 实体类型定义
+    # 实体类型定义 — 与 schemas.fta_schema.ENTITY_TYPES 保持一致
     ENTITY_SCHEMA = {
         "TOP_EVENT": {
             "description": "顶事件，系统最顶层的故障",
@@ -59,14 +59,38 @@ class EntityRecognizer:
             "description": "底事件，最基本的故障原因",
             "examples": ["梯子机械锁故障", "气路压力不足", "液压泵损坏"]
         },
+        "SYSTEM": {
+            "description": "一级功能系统",
+            "examples": ["液压系统", "电气系统", "飞控系统"]
+        },
+        "SUBSYSTEM": {
+            "description": "二级子系统/功能模块",
+            "examples": ["液压动力单元", "起落架收放子系统"]
+        },
         "DEVICE": {
-            "description": "设备",
-            "examples": ["登机梯", "液压系统", "发动机"]
+            "description": "设备/LRU",
+            "examples": ["登机梯", "液压泵", "发动机"]
         },
         "COMPONENT": {
-            "description": "部件",
-            "examples": ["机械锁", "液压泵", "传感器"]
-        }
+            "description": "部件/零件",
+            "examples": ["机械锁", "密封圈", "传感器"]
+        },
+        "FAULT_MODE": {
+            "description": "故障模式",
+            "examples": ["内漏", "卡滞", "断路", "短路"]
+        },
+        "FAULT_CODE": {
+            "description": "故障代码",
+            "examples": ["HYD-2101", "ENG-3050"]
+        },
+        "PARAMETER": {
+            "description": "监控参数",
+            "examples": ["液压压力", "温度", "振动值"]
+        },
+        "MAINTENANCE_ACTION": {
+            "description": "维修措施",
+            "examples": ["更换密封圈", "校准传感器", "清洗滤芯"]
+        },
     }
     
     def __init__(self, llm_client: LLMClient = None):

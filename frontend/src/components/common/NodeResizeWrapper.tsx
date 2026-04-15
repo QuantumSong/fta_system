@@ -7,7 +7,15 @@ interface NodeResizeWrapperProps {
   minWidth?: number
   minHeight?: number
   onSizeChange?: (w: number, h: number) => void
+  evidenceLevel?: string
   children: (size: { width: number; height: number }) => React.ReactNode
+}
+
+const EVIDENCE_BADGE: Record<string, { bg: string; border: string; icon: string; title: string }> = {
+  none: { bg: '#f5f5f5', border: '#d9d9d9', icon: '○', title: '无证据' },
+  single: { bg: '#fffbe6', border: '#faad14', icon: '◑', title: '单证据' },
+  strong: { bg: '#f6ffed', border: '#52c41a', icon: '●', title: '强证据' },
+  multi_doc: { bg: '#e6f7ff', border: '#1890ff', icon: '◉', title: '多文档证据' },
 }
 
 type HandlePos = 'tl' | 'tr' | 'bl' | 'br' | 't' | 'b' | 'l' | 'r'
@@ -24,6 +32,7 @@ const NodeResizeWrapper: React.FC<NodeResizeWrapperProps> = ({
   minWidth = 50,
   minHeight = 36,
   onSizeChange,
+  evidenceLevel,
   children,
 }) => {
   const [localW, setLocalW] = useState(width)
@@ -90,9 +99,37 @@ const NodeResizeWrapper: React.FC<NodeResizeWrapperProps> = ({
     { pos: 'r', style: { top: '50%', right: -4, transform: 'translateY(-50%)' } },
   ]
 
+  const badge = evidenceLevel ? EVIDENCE_BADGE[evidenceLevel] : null
+
   return (
     <div style={{ position: 'relative', width: localW, height: localH }}>
       {children({ width: localW, height: localH })}
+      {badge && (
+        <div
+          title={badge.title}
+          style={{
+            position: 'absolute',
+            top: -6,
+            right: -6,
+            width: 16,
+            height: 16,
+            borderRadius: '50%',
+            background: badge.bg,
+            border: `1.5px solid ${badge.border}`,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 10,
+            lineHeight: 1,
+            color: badge.border,
+            zIndex: 10,
+            pointerEvents: 'none',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.12)',
+          }}
+        >
+          {badge.icon}
+        </div>
+      )}
       {selected && handles.map(h => (
         <div
           key={h.pos}

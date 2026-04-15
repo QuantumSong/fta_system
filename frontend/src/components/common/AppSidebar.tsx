@@ -6,6 +6,8 @@ import {
   ExperimentOutlined,
   SettingOutlined,
   TeamOutlined,
+  SafetyCertificateOutlined,
+  BarChartOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
 
@@ -37,6 +39,16 @@ const AppSidebar: React.FC = () => {
       key: '/knowledge',
       icon: <ExperimentOutlined />,
       label: '知识抽取',
+    },
+    {
+      key: '/expert',
+      icon: <SafetyCertificateOutlined />,
+      label: '专家模式',
+    },
+    {
+      key: '/benchmark',
+      icon: <BarChartOutlined />,
+      label: '指标评测',
     },
     {
       key: '/settings',

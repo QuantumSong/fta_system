@@ -27,11 +27,19 @@ class FTARelation:
 class RelationExtractor:
     """关系抽取器"""
     
-    # 关系类型定义
+    # 关系类型定义 — 与 schemas.fta_schema.RELATION_TYPES 保持一致
     RELATION_TYPES = {
         "CAUSES": {
             "description": "因果关系，前因导致后果",
             "keywords": ["导致", "引起", "造成", "引发", "使"]
+        },
+        "AND_GATE": {
+            "description": "与门：所有子事件同时发生",
+            "keywords": ["且", "同时", "并且", "均"]
+        },
+        "OR_GATE": {
+            "description": "或门：任一子事件发生",
+            "keywords": ["或", "任一", "其中之一"]
         },
         "PART_OF": {
             "description": "组成部分关系",
@@ -39,8 +47,24 @@ class RelationExtractor:
         },
         "LOCATED_AT": {
             "description": "位置关系",
-            "keywords": ["位于", "在...上", "在...内"]
-        }
+            "keywords": ["位于", "在...上", "在...内", "安装于"]
+        },
+        "HAS_FAULT_MODE": {
+            "description": "设备/部件→故障模式",
+            "keywords": ["故障模式", "表现为", "可能出现"]
+        },
+        "HAS_FAULT_CODE": {
+            "description": "事件→故障代码",
+            "keywords": ["故障代码", "故障编号", "代码"]
+        },
+        "MONITORED_BY": {
+            "description": "设备/事件→监控参数",
+            "keywords": ["监控", "监测", "检测参数", "测量"]
+        },
+        "REPAIRED_BY": {
+            "description": "故障→维修措施",
+            "keywords": ["修复", "更换", "维修", "排故", "校准"]
+        },
     }
     
     def __init__(self, llm_client: LLMClient = None):

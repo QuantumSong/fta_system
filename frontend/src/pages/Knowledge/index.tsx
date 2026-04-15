@@ -2,10 +2,10 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import {
   Card, Table, Input, Button, Tag, Space, message, Modal, Form, Select,
   Descriptions, Drawer, Progress, Tabs, Upload, Spin, Empty,
-  Statistic, Alert, Divider, Segmented, Tooltip, Slider,
+  Statistic, Alert, Divider, Segmented, Tooltip, Slider, Popconfirm, InputNumber,
 } from 'antd'
 import {
-  SearchOutlined, ReloadOutlined, EyeOutlined, PlusOutlined,
+  SearchOutlined, ReloadOutlined, EyeOutlined, PlusOutlined, EditOutlined,
   DeleteOutlined, NodeIndexOutlined, TagsOutlined, ApiOutlined,
   UploadOutlined, FileTextOutlined, ExperimentOutlined, CloudUploadOutlined,
   CheckCircleOutlined, ClockCircleOutlined, CloseCircleOutlined,
@@ -22,16 +22,26 @@ const typeMap: Record<string, { color: string; text: string }> = {
   TOP_EVENT: { color: 'red', text: '顶事件' },
   MIDDLE_EVENT: { color: 'orange', text: '中间事件' },
   BASIC_EVENT: { color: 'green', text: '底事件' },
+  SYSTEM: { color: 'geekblue', text: '系统' },
+  SUBSYSTEM: { color: 'cyan', text: '子系统' },
   DEVICE: { color: 'blue', text: '设备' },
   COMPONENT: { color: 'purple', text: '部件' },
+  FAULT_MODE: { color: 'volcano', text: '故障模式' },
+  FAULT_CODE: { color: 'magenta', text: '故障代码' },
+  PARAMETER: { color: 'lime', text: '监控参数' },
+  MAINTENANCE_ACTION: { color: 'gold', text: '维修措施' },
 }
 
 const relTypeMap: Record<string, { color: string; text: string }> = {
   CAUSES: { color: 'volcano', text: '因果' },
-  PART_OF: { color: 'geekblue', text: '组成' },
-  LOCATED_AT: { color: 'cyan', text: '位置' },
   AND_GATE: { color: 'magenta', text: '与门' },
   OR_GATE: { color: 'gold', text: '或门' },
+  PART_OF: { color: 'geekblue', text: '组成' },
+  LOCATED_AT: { color: 'cyan', text: '位置' },
+  HAS_FAULT_MODE: { color: 'red', text: '故障模式' },
+  HAS_FAULT_CODE: { color: 'purple', text: '故障代码' },
+  MONITORED_BY: { color: 'lime', text: '监控' },
+  REPAIRED_BY: { color: 'green', text: '维修' },
 }
 
 const statusIcon = (s: string) => {
@@ -51,10 +61,15 @@ const fileIcon = (t: string) => {
 /* ===================== 知识图谱 SVG 可视化 (d3-force) ===================== */
 const NODE_COLORS: Record<string, string> = {
   TOP_EVENT: '#ef4444', MIDDLE_EVENT: '#f59e0b', BASIC_EVENT: '#22c55e',
-  DEVICE: '#3b82f6', COMPONENT: '#8b5cf6',
+  SYSTEM: '#6366f1', SUBSYSTEM: '#8b5cf6',
+  DEVICE: '#3b82f6', COMPONENT: '#14b8a6',
+  FAULT_MODE: '#ec4899', FAULT_CODE: '#f43f5e',
+  PARAMETER: '#0ea5e9', MAINTENANCE_ACTION: '#84cc16',
 }
 const NODE_RADIUS: Record<string, number> = {
-  TOP_EVENT: 26, MIDDLE_EVENT: 22, BASIC_EVENT: 18, DEVICE: 20, COMPONENT: 18,
+  TOP_EVENT: 26, MIDDLE_EVENT: 22, BASIC_EVENT: 18,
+  SYSTEM: 24, SUBSYSTEM: 22, DEVICE: 20, COMPONENT: 18,
+  FAULT_MODE: 16, FAULT_CODE: 14, PARAMETER: 16, MAINTENANCE_ACTION: 16,
 }
 
 type LayoutMode = 'force' | 'circular' | 'hierarchical' | 'grid'
@@ -438,6 +453,9 @@ const Knowledge: React.FC = () => {
   const [textResult, setTextResult] = useState<any>(null)
   const [textExtracting, setTextExtracting] = useState(false)
   const [textProgress, setTextProgress] = useState(0)
+  // 文档管理
+  const [editingDoc, setEditingDoc] = useState<any>(null)
+  const [editDocForm] = Form.useForm()
   // 实体 tab
   const [entities, setEntities] = useState<any[]>([])
   const [entitiesLoading, setEntitiesLoading] = useState(false)
@@ -476,6 +494,37 @@ const Knowledge: React.FC = () => {
   }
 
   useEffect(() => { loadDocuments() }, [scopeMode, selectedProject])
+  useEffect(() => { if (activeTab === 'entities') loadEntities() }, [scopeMode, selectedProject, activeTab])
+
+  const handleDeleteDoc = async (docId: number) => {
+    try {
+      await documentApi.deleteDocument(docId)
+      message.success('文档已删除')
+      setDocuments(prev => prev.filter(d => d.id !== docId))
+    } catch { message.error('删除失败') }
+  }
+
+  const handleEditDoc = (doc: any) => {
+    setEditingDoc(doc)
+    editDocForm.setFieldsValue({
+      filename: doc.filename,
+      tags: doc.tags || [],
+      device_model: doc.device_model || '',
+      source_level: doc.source_level || 'internal',
+      trust_level: doc.trust_level ?? 0.8,
+    })
+  }
+
+  const handleSaveDoc = async () => {
+    if (!editingDoc) return
+    try {
+      const values = await editDocForm.validateFields()
+      await documentApi.updateDocument(editingDoc.id, values)
+      message.success('文档信息已更新')
+      setDocuments(prev => prev.map(d => d.id === editingDoc.id ? { ...d, ...values } : d))
+      setEditingDoc(null)
+    } catch { message.error('更新失败') }
+  }
 
   const handleUpload = async (file: File) => {
     try {
@@ -510,6 +559,8 @@ const Knowledge: React.FC = () => {
             const succeeded = (prog.details || []).filter((d: any) => d.status === 'completed').length
             const failed = (prog.details || []).filter((d: any) => d.status === 'failed').length
             message.success(`知识抽取完成: ${succeeded} 成功${failed ? `, ${failed} 失败` : ''}`)
+            // 自动刷新实体列表
+            loadEntities()
           }
         } catch { /* ignore */ }
       }, 2000)
@@ -543,19 +594,80 @@ const Knowledge: React.FC = () => {
   const loadEntities = async () => {
     try {
       setEntitiesLoading(true)
-      const data: any = await knowledgeApi.searchEntities(searchQuery || '*')
+      const data: any = await knowledgeApi.searchEntities(searchQuery || '*', undefined, effectiveProjectId)
       setEntities(data.entities || [])
     } catch { message.error('加载实体失败') } finally { setEntitiesLoading(false) }
   }
 
   const handleCreateEntity = async (values: any) => {
     try {
+      if (values.confidence != null) values.confidence = Number(values.confidence)
       await knowledgeApi.createEntity({ ...values, project_id: effectiveProjectId })
       message.success('创建成功')
       setIsCreateModalOpen(false)
       form.resetFields()
       loadEntities()
     } catch { message.error('创建失败') }
+  }
+
+  const [editingEntity, setEditingEntity] = useState<any>(null)
+  const [editForm] = Form.useForm()
+  const [addRelForm] = Form.useForm()
+  const [addRelModalOpen, setAddRelModalOpen] = useState(false)
+
+  const handleEditEntity = (entity: any) => {
+    setEditingEntity(entity)
+    editForm.setFieldsValue({
+      name: entity.name,
+      entity_type: entity.type,
+      description: entity.description,
+      device_type: entity.device_type,
+      confidence: entity.confidence,
+      fault_code: entity.fault_code,
+      fault_mode: entity.fault_mode,
+      severity: entity.severity,
+      detection_method: entity.detection_method,
+      parameter_name: entity.parameter_name,
+      parameter_range: entity.parameter_range,
+      maintenance_ref: entity.maintenance_ref,
+      evidence_level: entity.evidence_level,
+    })
+  }
+
+  const handleSaveEntity = async () => {
+    if (!editingEntity) return
+    try {
+      const values = await editForm.validateFields()
+      if (values.confidence != null) values.confidence = Number(values.confidence)
+      await knowledgeApi.updateEntity(editingEntity.id, values)
+      message.success('更新成功')
+      setEditingEntity(null)
+      loadEntities()
+      // 如果详情抽屉打开的是同一个实体，刷新详情
+      if (selectedEntity?.id === editingEntity.id) {
+        handleViewEntity({ ...editingEntity, ...values })
+      }
+    } catch { message.error('更新失败') }
+  }
+
+  const handleAddRelation = async (values: any) => {
+    try {
+      await knowledgeApi.createRelation({
+        source_entity_id: values.source_entity_id,
+        target_entity_id: values.target_entity_id,
+        relation_type: values.relation_type,
+        confidence: values.confidence || 1.0,
+        project_id: effectiveProjectId,
+      })
+      message.success('关系创建成功')
+      setAddRelModalOpen(false)
+      addRelForm.resetFields()
+      // 刷新当前实体的关系
+      if (selectedEntity) {
+        const data: any = await knowledgeApi.getRelations(selectedEntity.id)
+        setEntityRelations(data.relations || [])
+      }
+    } catch { message.error('创建关系失败') }
   }
 
   const handleDeleteEntity = (id: number) => {
@@ -642,18 +754,34 @@ const Knowledge: React.FC = () => {
   /* ---- 实体表格列 ---- */
   const entityColumns = [
     { title: '名称', dataIndex: 'name', key: 'name', render: (t: string) => <span style={{ fontWeight: 500 }}>{t}</span> },
-    { title: '类型', dataIndex: 'type', key: 'type', render: (t: string) => {
+    { title: '类型', dataIndex: 'type', key: 'type', width: 110, render: (t: string) => {
       const m = typeMap[t] || { color: 'default', text: t }; return <Tag color={m.color}>{m.text}</Tag>
     }},
     { title: '描述', dataIndex: 'description', key: 'desc', ellipsis: true, render: (t: string) => <span style={{ color: 'var(--text-secondary)' }}>{t || '—'}</span> },
-    { title: '设备类型', dataIndex: 'device_type', key: 'dt', render: (t: string) => t || '—' },
-    { title: '置信度', dataIndex: 'confidence', key: 'conf', width: 130, render: (v: number) => v != null ? (
+    { title: '故障代码', dataIndex: 'fault_code', key: 'fc', width: 110, render: (t: string) => t ? <Tag color="red" style={{ fontSize: 11 }}>{t}</Tag> : '—' },
+    { title: '严重等级', dataIndex: 'severity', key: 'sev', width: 100, render: (t: string) => {
+      if (!t) return '—'
+      const labels: Record<string, { c: string; l: string }> = { catastrophic: { c: '#dc2626', l: '灾难性' }, hazardous: { c: '#ea580c', l: '危险' }, major: { c: '#d97706', l: '重大' }, minor: { c: '#65a30d', l: '轻微' }, no_effect: { c: '#64748b', l: '无影响' } }
+      const m = labels[t] || { c: 'default', l: t }
+      return <Tag color={m.c} style={{ fontSize: 11 }}>{m.l}</Tag>
+    }},
+    { title: '证据', dataIndex: 'evidence_level', key: 'ev', width: 80, render: (t: string) => {
+      if (!t) return '—'
+      const colors: Record<string, string> = { direct: 'green', inferred: 'blue', assumed: 'orange', none: 'default' }
+      const labels: Record<string, string> = { direct: '直接', inferred: '推断', assumed: '假设', none: '无' }
+      return <Tag color={colors[t] || 'default'} style={{ fontSize: 11 }}>{labels[t] || t}</Tag>
+    }},
+    { title: '置信度', dataIndex: 'confidence', key: 'conf', width: 120, render: (v: number) => v != null ? (
       <Progress percent={Math.round(v * 100)} size="small"
         strokeColor={v >= 0.8 ? 'var(--success)' : v >= 0.5 ? 'var(--warning)' : 'var(--danger)'} />
     ) : '—' },
-    { title: '操作', key: 'action', width: 150, render: (_: any, r: any) => (
+    { title: '来源', key: 'src', width: 80, render: (_: any, r: any) =>
+      r.source_document_id ? <Tag color="blue" style={{ fontSize: 11 }}>自动抽取</Tag> : <Tag style={{ fontSize: 11 }}>手动</Tag>
+    },
+    { title: '操作', key: 'action', width: 160, render: (_: any, r: any) => (
       <Space size="small">
         <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => handleViewEntity(r)}>详情</Button>
+        <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEditEntity(r)}>编辑</Button>
         <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => handleDeleteEntity(r.id)}>删除</Button>
       </Space>
     )},
@@ -759,19 +887,65 @@ const Knowledge: React.FC = () => {
                 </div>
               )}
 
-              <div style={{ marginTop: 10, maxHeight: 300, overflowY: 'auto' }}>
+              <div style={{ marginTop: 10, maxHeight: 400, overflowY: 'auto' }}>
                 {documents.map(doc => {
                   const status = doc.extraction_status || 'pending'
+                  const sizeStr = doc.file_size ? (doc.file_size < 1024 * 1024
+                    ? `${(doc.file_size / 1024).toFixed(0)} KB`
+                    : `${(doc.file_size / 1024 / 1024).toFixed(1)} MB`) : ''
                   return (
                     <div key={doc.id} style={{
-                      display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px',
+                      display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px',
                       borderBottom: '1px solid #f0f0f0', fontSize: 13,
-                    }}>
+                      transition: 'background 0.15s',
+                    }}
+                      onMouseEnter={e => (e.currentTarget.style.background = '#fafafa')}
+                      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                    >
                       {fileIcon(doc.doc_type)}
-                      <span style={{ flex: 1, fontWeight: 500 }}>{doc.filename}</span>
-                      <span>{statusIcon(status)} <span style={{ marginLeft: 4, color: 'var(--text-secondary)', fontSize: 12 }}>
-                        {status === 'completed' ? '已完成' : status === 'processing' ? '抽取中' : status === 'failed' ? '失败' : '待抽取'}
-                      </span></span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {doc.filename}
+                        </div>
+                        <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          {sizeStr && <span>{sizeStr}</span>}
+                          {doc.uploaded_at && <span>{new Date(doc.uploaded_at).toLocaleDateString()}</span>}
+                          {doc.source_level && doc.source_level !== 'internal' && (
+                            <Tag style={{ fontSize: 10, lineHeight: '16px', padding: '0 4px', margin: 0 }}>{
+                              doc.source_level === 'official' ? '官方' : doc.source_level === 'thirdparty' ? '第三方' : doc.source_level === 'forum' ? '论坛' : doc.source_level === 'experience' ? '经验' : doc.source_level
+                            }</Tag>
+                          )}
+                          {(doc.tags || []).slice(0, 2).map((t: string) => (
+                            <Tag key={t} style={{ fontSize: 10, lineHeight: '16px', padding: '0 4px', margin: 0 }} color="blue">{t}</Tag>
+                          ))}
+                        </div>
+                      </div>
+                      <span style={{ flexShrink: 0 }}>
+                        {statusIcon(status)}
+                        <span style={{ marginLeft: 4, color: 'var(--text-secondary)', fontSize: 12 }}>
+                          {status === 'completed' ? '已完成' : status === 'processing' ? '抽取中' : status === 'failed' ? '失败' : '待抽取'}
+                        </span>
+                      </span>
+                      <Space size={0} style={{ flexShrink: 0 }}>
+                        <Tooltip title="编辑">
+                          <Button type="text" size="small" icon={<EditOutlined />}
+                            onClick={() => handleEditDoc(doc)}
+                            style={{ color: 'var(--text-tertiary)' }} />
+                        </Tooltip>
+                        <Popconfirm
+                          title="确定删除此文档？"
+                          description="关联的文档分块也会一并删除"
+                          onConfirm={() => handleDeleteDoc(doc.id)}
+                          okText="删除"
+                          cancelText="取消"
+                          okButtonProps={{ danger: true }}
+                        >
+                          <Tooltip title="删除">
+                            <Button type="text" size="small" icon={<DeleteOutlined />}
+                              style={{ color: 'var(--text-tertiary)' }} />
+                          </Tooltip>
+                        </Popconfirm>
+                      </Space>
                     </div>
                   )
                 })}
@@ -920,6 +1094,27 @@ const Knowledge: React.FC = () => {
                     </div>
                   )}
 
+                  {/* 工业 schema 扩展字段 */}
+                  {(selectedGraphNode.fault_code || selectedGraphNode.fault_mode || selectedGraphNode.severity || selectedGraphNode.detection_method || selectedGraphNode.parameter_name || selectedGraphNode.maintenance_ref || selectedGraphNode.evidence_level) && (
+                    <div style={{ background: 'var(--bg-page)', borderRadius: 8, padding: '10px 12px', marginBottom: 12, fontSize: 12, lineHeight: 2 }}>
+                      {selectedGraphNode.fault_code && <div><span style={{ fontWeight: 500, color: 'var(--text-secondary)' }}>故障代码:</span> <Tag color="red" style={{ fontSize: 11 }}>{selectedGraphNode.fault_code}</Tag></div>}
+                      {selectedGraphNode.fault_mode && <div><span style={{ fontWeight: 500, color: 'var(--text-secondary)' }}>故障模式:</span> {selectedGraphNode.fault_mode}</div>}
+                      {selectedGraphNode.severity && <div><span style={{ fontWeight: 500, color: 'var(--text-secondary)' }}>严重等级:</span> <Tag color={
+                        selectedGraphNode.severity === 'catastrophic' ? '#dc2626' : selectedGraphNode.severity === 'hazardous' ? '#ea580c' : selectedGraphNode.severity === 'major' ? '#d97706' : '#65a30d'
+                      } style={{ fontSize: 11 }}>{
+                        selectedGraphNode.severity === 'catastrophic' ? '灾难性' : selectedGraphNode.severity === 'hazardous' ? '危险' : selectedGraphNode.severity === 'major' ? '重大' : selectedGraphNode.severity === 'minor' ? '轻微' : '无影响'
+                      }</Tag></div>}
+                      {selectedGraphNode.detection_method && <div><span style={{ fontWeight: 500, color: 'var(--text-secondary)' }}>检测方式:</span> {selectedGraphNode.detection_method}</div>}
+                      {selectedGraphNode.parameter_name && <div><span style={{ fontWeight: 500, color: 'var(--text-secondary)' }}>监控参数:</span> {selectedGraphNode.parameter_name}{selectedGraphNode.parameter_range ? ` (${selectedGraphNode.parameter_range})` : ''}</div>}
+                      {selectedGraphNode.maintenance_ref && <div><span style={{ fontWeight: 500, color: 'var(--text-secondary)' }}>维修参考:</span> {selectedGraphNode.maintenance_ref}</div>}
+                      {selectedGraphNode.evidence_level && <div><span style={{ fontWeight: 500, color: 'var(--text-secondary)' }}>证据等级:</span> <Tag color={
+                        selectedGraphNode.evidence_level === 'direct' ? 'green' : selectedGraphNode.evidence_level === 'inferred' ? 'blue' : 'orange'
+                      } style={{ fontSize: 11 }}>{
+                        selectedGraphNode.evidence_level === 'direct' ? '直接证据' : selectedGraphNode.evidence_level === 'inferred' ? '推断' : selectedGraphNode.evidence_level === 'assumed' ? '假设' : '无'
+                      }</Tag></div>}
+                    </div>
+                  )}
+
                   <Divider style={{ margin: '12px 0' }} />
 
                   <Button type="primary" icon={<AimOutlined />} block style={{ marginBottom: 12 }}
@@ -962,59 +1157,244 @@ const Knowledge: React.FC = () => {
         )},
       ]} />
 
-      {/* 创建实体 Modal */}
-      <Modal title="添加知识实体" open={isCreateModalOpen}
+      {/* ═══ 创建实体 Modal ═══ */}
+      <Modal title={<span><PlusOutlined style={{ marginRight: 8, color: 'var(--primary)' }} />添加知识实体</span>}
+        open={isCreateModalOpen} width={640}
         onCancel={() => { setIsCreateModalOpen(false); form.resetFields() }}
-        onOk={() => form.submit()} okText="创建" cancelText="取消">
+        onOk={() => form.submit()} okText="创建" cancelText="取消" destroyOnClose>
         <Form form={form} layout="vertical" onFinish={handleCreateEntity} style={{ marginTop: 16 }}>
-          <Form.Item name="name" label="实体名称" rules={[{ required: true, message: '请输入实体名称' }]}>
-            <Input placeholder="例如：液压泵故障" />
-          </Form.Item>
-          <Form.Item name="entity_type" label="实体类型" rules={[{ required: true, message: '请选择实体类型' }]}>
-            <Select placeholder="选择类型">
-              <Select.Option value="TOP_EVENT">顶事件</Select.Option>
-              <Select.Option value="MIDDLE_EVENT">中间事件</Select.Option>
-              <Select.Option value="BASIC_EVENT">底事件</Select.Option>
-              <Select.Option value="DEVICE">设备</Select.Option>
-              <Select.Option value="COMPONENT">部件</Select.Option>
-            </Select>
-          </Form.Item>
-          <Form.Item name="description" label="描述"><Input.TextArea rows={3} placeholder="描述该实体..." /></Form.Item>
-          <Form.Item name="device_type" label="设备类型"><Input placeholder="例如：液压系统" /></Form.Item>
-          <Form.Item name="confidence" label="置信度" initialValue={1.0}><Input type="number" min={0} max={1} step={0.1} /></Form.Item>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
+            <Form.Item name="name" label="实体名称" rules={[{ required: true, message: '请输入实体名称' }]}>
+              <Input placeholder="例如：液压泵故障" />
+            </Form.Item>
+            <Form.Item name="entity_type" label="实体类型" rules={[{ required: true, message: '请选择实体类型' }]}>
+              <Select placeholder="选择类型" options={Object.entries(typeMap).map(([k, v]) => ({ value: k, label: v.text }))} />
+            </Form.Item>
+          </div>
+          <Form.Item name="description" label="描述"><Input.TextArea rows={2} placeholder="描述该实体..." /></Form.Item>
+          <Divider style={{ margin: '12px 0', fontSize: 12 }}>工业属性</Divider>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
+            <Form.Item name="device_type" label="设备类型"><Input placeholder="例如：液压系统" /></Form.Item>
+            <Form.Item name="fault_code" label="故障代码"><Input placeholder="例如：HYD-2101" /></Form.Item>
+            <Form.Item name="fault_mode" label="故障模式"><Input placeholder="例如：内漏、卡滞" /></Form.Item>
+            <Form.Item name="severity" label="严重等级">
+              <Select placeholder="选择" allowClear options={[
+                { value: 'catastrophic', label: '灾难性' }, { value: 'hazardous', label: '危险' },
+                { value: 'major', label: '重大' }, { value: 'minor', label: '轻微' }, { value: 'no_effect', label: '无影响' },
+              ]} />
+            </Form.Item>
+            <Form.Item name="detection_method" label="检测方式"><Input placeholder="例如：BITE自检" /></Form.Item>
+            <Form.Item name="evidence_level" label="证据等级">
+              <Select placeholder="选择" allowClear options={[
+                { value: 'direct', label: '直接证据' }, { value: 'inferred', label: '推断' },
+                { value: 'assumed', label: '假设' }, { value: 'none', label: '无' },
+              ]} />
+            </Form.Item>
+            <Form.Item name="parameter_name" label="监控参数"><Input placeholder="例如：液压压力" /></Form.Item>
+            <Form.Item name="parameter_range" label="参数范围"><Input placeholder="例如：2800-3200 psi" /></Form.Item>
+            <Form.Item name="maintenance_ref" label="维修参考"><Input placeholder="AMM/TSM章节号" /></Form.Item>
+            <Form.Item name="confidence" label="置信度" initialValue={1.0}>
+              <InputNumber min={0} max={1} step={0.1} style={{ width: '100%' }} />
+            </Form.Item>
+          </div>
         </Form>
       </Modal>
 
-      {/* 实体详情 Drawer */}
-      <Drawer title={<span style={{ fontWeight: 600 }}>实体详情</span>} open={isDetailDrawerOpen}
-        onClose={() => { setIsDetailDrawerOpen(false); setSelectedEntity(null); setEntityRelations([]) }} width={500}>
+      {/* ═══ 编辑实体 Modal ═══ */}
+      <Modal title={<span><EditOutlined style={{ marginRight: 8, color: 'var(--primary)' }} />编辑实体</span>}
+        open={!!editingEntity} width={640}
+        onCancel={() => setEditingEntity(null)}
+        onOk={handleSaveEntity} okText="保存" cancelText="取消" destroyOnClose>
+        <Form form={editForm} layout="vertical" style={{ marginTop: 16 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
+            <Form.Item name="name" label="实体名称" rules={[{ required: true, message: '请输入实体名称' }]}>
+              <Input />
+            </Form.Item>
+            <Form.Item name="entity_type" label="实体类型" rules={[{ required: true, message: '请选择实体类型' }]}>
+              <Select options={Object.entries(typeMap).map(([k, v]) => ({ value: k, label: v.text }))} />
+            </Form.Item>
+          </div>
+          <Form.Item name="description" label="描述"><Input.TextArea rows={2} /></Form.Item>
+          <Divider style={{ margin: '12px 0', fontSize: 12 }}>工业属性</Divider>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
+            <Form.Item name="device_type" label="设备类型"><Input /></Form.Item>
+            <Form.Item name="fault_code" label="故障代码"><Input /></Form.Item>
+            <Form.Item name="fault_mode" label="故障模式"><Input /></Form.Item>
+            <Form.Item name="severity" label="严重等级">
+              <Select allowClear options={[
+                { value: 'catastrophic', label: '灾难性' }, { value: 'hazardous', label: '危险' },
+                { value: 'major', label: '重大' }, { value: 'minor', label: '轻微' }, { value: 'no_effect', label: '无影响' },
+              ]} />
+            </Form.Item>
+            <Form.Item name="detection_method" label="检测方式"><Input /></Form.Item>
+            <Form.Item name="evidence_level" label="证据等级">
+              <Select allowClear options={[
+                { value: 'direct', label: '直接证据' }, { value: 'inferred', label: '推断' },
+                { value: 'assumed', label: '假设' }, { value: 'none', label: '无' },
+              ]} />
+            </Form.Item>
+            <Form.Item name="parameter_name" label="监控参数"><Input /></Form.Item>
+            <Form.Item name="parameter_range" label="参数范围"><Input /></Form.Item>
+            <Form.Item name="maintenance_ref" label="维修参考"><Input /></Form.Item>
+            <Form.Item name="confidence" label="置信度">
+              <InputNumber min={0} max={1} step={0.1} style={{ width: '100%' }} />
+            </Form.Item>
+          </div>
+        </Form>
+      </Modal>
+
+      {/* ═══ 添加关系 Modal ═══ */}
+      <Modal title={<span><ApiOutlined style={{ marginRight: 8, color: 'var(--primary)' }} />添加实体关系</span>}
+        open={addRelModalOpen} width={520}
+        onCancel={() => { setAddRelModalOpen(false); addRelForm.resetFields() }}
+        onOk={() => addRelForm.submit()} okText="创建" cancelText="取消" destroyOnClose>
+        <Form form={addRelForm} layout="vertical" onFinish={handleAddRelation} style={{ marginTop: 16 }}>
+          <Form.Item name="source_entity_id" label="源实体" rules={[{ required: true, message: '请选择' }]} initialValue={selectedEntity?.id}>
+            <Select showSearch optionFilterProp="label" placeholder="选择源实体"
+              options={entities.map(e => ({ value: e.id, label: `${e.name} (${typeMap[e.type]?.text || e.type})` }))} />
+          </Form.Item>
+          <Form.Item name="relation_type" label="关系类型" rules={[{ required: true, message: '请选择关系类型' }]}>
+            <Select placeholder="选择关系类型" options={Object.entries(relTypeMap).map(([k, v]) => ({ value: k, label: v.text }))} />
+          </Form.Item>
+          <Form.Item name="target_entity_id" label="目标实体" rules={[{ required: true, message: '请选择' }]}>
+            <Select showSearch optionFilterProp="label" placeholder="选择目标实体"
+              options={entities.map(e => ({ value: e.id, label: `${e.name} (${typeMap[e.type]?.text || e.type})` }))} />
+          </Form.Item>
+          <Form.Item name="confidence" label="置信度" initialValue={1.0}>
+            <InputNumber min={0} max={1} step={0.1} style={{ width: '100%' }} />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* ═══ 实体详情 Drawer ═══ */}
+      <Drawer title={<span style={{ fontWeight: 600 }}><NodeIndexOutlined style={{ marginRight: 8, color: 'var(--primary)' }} />实体详情</span>}
+        open={isDetailDrawerOpen}
+        onClose={() => { setIsDetailDrawerOpen(false); setSelectedEntity(null); setEntityRelations([]) }}
+        width={560}
+        extra={selectedEntity && (
+          <Space>
+            <Button size="small" icon={<EditOutlined />} onClick={() => { handleEditEntity(selectedEntity); setIsDetailDrawerOpen(false) }}>编辑</Button>
+            <Button size="small" icon={<ApiOutlined />} type="primary" onClick={() => { addRelForm.setFieldsValue({ source_entity_id: selectedEntity.id }); setAddRelModalOpen(true) }}>添加关系</Button>
+          </Space>
+        )}>
         {selectedEntity && (
           <div>
-            <Descriptions column={1} bordered size="small" labelStyle={{ fontWeight: 500, width: 100 }}>
-              <Descriptions.Item label="名称"><span style={{ fontWeight: 600 }}>{selectedEntity.name}</span></Descriptions.Item>
+            {/* 基本信息 */}
+            <Descriptions column={2} bordered size="small" labelStyle={{ fontWeight: 500, width: 90 }}>
+              <Descriptions.Item label="名称" span={2}><span style={{ fontWeight: 600, fontSize: 15 }}>{selectedEntity.name}</span></Descriptions.Item>
               <Descriptions.Item label="类型">
                 <Tag color={typeMap[selectedEntity.type]?.color || 'default'}>{typeMap[selectedEntity.type]?.text || selectedEntity.type}</Tag>
               </Descriptions.Item>
-              <Descriptions.Item label="描述">{selectedEntity.description || '—'}</Descriptions.Item>
-              <Descriptions.Item label="设备类型">{selectedEntity.device_type || '—'}</Descriptions.Item>
               <Descriptions.Item label="置信度">
-                {selectedEntity.confidence != null ? <Progress percent={Math.round(selectedEntity.confidence * 100)} size="small" style={{ maxWidth: 200 }} /> : '—'}
+                {selectedEntity.confidence != null ? <Progress percent={Math.round(selectedEntity.confidence * 100)} size="small" style={{ maxWidth: 160 }} /> : '—'}
+              </Descriptions.Item>
+              <Descriptions.Item label="描述" span={2}>{selectedEntity.description || '—'}</Descriptions.Item>
+              <Descriptions.Item label="来源" span={2}>
+                {selectedEntity.source_document_id ? <Tag color="blue">自动抽取 (文档 #{selectedEntity.source_document_id})</Tag> : <Tag>手动创建</Tag>}
               </Descriptions.Item>
             </Descriptions>
+
+            {/* 工业属性 */}
+            {(selectedEntity.device_type || selectedEntity.fault_code || selectedEntity.fault_mode || selectedEntity.severity || selectedEntity.detection_method || selectedEntity.parameter_name || selectedEntity.maintenance_ref || selectedEntity.evidence_level) && (
+              <div style={{ marginTop: 16 }}>
+                <h4 style={{ fontWeight: 600, marginBottom: 8, fontSize: 13 }}>工业属性</h4>
+                <Descriptions column={2} bordered size="small" labelStyle={{ fontWeight: 500, width: 90 }}>
+                  {selectedEntity.device_type && <Descriptions.Item label="设备类型">{selectedEntity.device_type}</Descriptions.Item>}
+                  {selectedEntity.fault_code && <Descriptions.Item label="故障代码"><Tag color="red">{selectedEntity.fault_code}</Tag></Descriptions.Item>}
+                  {selectedEntity.fault_mode && <Descriptions.Item label="故障模式">{selectedEntity.fault_mode}</Descriptions.Item>}
+                  {selectedEntity.severity && <Descriptions.Item label="严重等级"><Tag color={
+                    selectedEntity.severity === 'catastrophic' ? '#dc2626' : selectedEntity.severity === 'hazardous' ? '#ea580c' : selectedEntity.severity === 'major' ? '#d97706' : '#65a30d'
+                  }>{
+                    ({ catastrophic: '灾难性', hazardous: '危险', major: '重大', minor: '轻微', no_effect: '无影响' } as any)[selectedEntity.severity] || selectedEntity.severity
+                  }</Tag></Descriptions.Item>}
+                  {selectedEntity.detection_method && <Descriptions.Item label="检测方式" span={2}>{selectedEntity.detection_method}</Descriptions.Item>}
+                  {selectedEntity.evidence_level && <Descriptions.Item label="证据等级"><Tag color={
+                    selectedEntity.evidence_level === 'direct' ? 'green' : selectedEntity.evidence_level === 'inferred' ? 'blue' : 'orange'
+                  }>{
+                    ({ direct: '直接证据', inferred: '推断', assumed: '假设', none: '无' } as any)[selectedEntity.evidence_level] || selectedEntity.evidence_level
+                  }</Tag></Descriptions.Item>}
+                  {selectedEntity.parameter_name && <Descriptions.Item label="监控参数">{selectedEntity.parameter_name}{selectedEntity.parameter_range ? ` (${selectedEntity.parameter_range})` : ''}</Descriptions.Item>}
+                  {selectedEntity.maintenance_ref && <Descriptions.Item label="维修参考" span={2}>{selectedEntity.maintenance_ref}</Descriptions.Item>}
+                </Descriptions>
+              </div>
+            )}
+
+            {/* 关联关系 */}
             <div style={{ marginTop: 24 }}>
-              <h4 style={{ fontWeight: 600, marginBottom: 12 }}><ApiOutlined style={{ marginRight: 8, color: 'var(--primary)' }} />关联关系 ({entityRelations.length})</h4>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                <h4 style={{ fontWeight: 600, margin: 0 }}><ApiOutlined style={{ marginRight: 8, color: 'var(--primary)' }} />关联关系 ({entityRelations.length})</h4>
+                <Button size="small" type="primary" ghost icon={<PlusOutlined />}
+                  onClick={() => { addRelForm.setFieldsValue({ source_entity_id: selectedEntity.id }); setAddRelModalOpen(true) }}>
+                  添加关系
+                </Button>
+              </div>
               {entityRelations.length > 0 ? (
-                <Table size="small" dataSource={entityRelations} rowKey="id" pagination={false}
-                  columns={[
-                    { title: '源实体', dataIndex: 'source_entity_id', key: 's' },
-                    { title: '关系', dataIndex: 'type', key: 't', render: (t: string) => <Tag color={relTypeMap[t]?.color}>{relTypeMap[t]?.text || t}</Tag> },
-                    { title: '目标实体', dataIndex: 'target_entity_id', key: 'tgt' },
-                  ]} />
-              ) : <div style={{ color: 'var(--text-tertiary)', padding: 24, textAlign: 'center', background: 'var(--bg-page)', borderRadius: 8 }}>暂无关联关系</div>}
+                <div style={{ maxHeight: 320, overflowY: 'auto' }}>
+                  {entityRelations.map((r: any) => {
+                    const isSource = r.source_entity_id === selectedEntity.id
+                    const otherId = isSource ? r.target_entity_id : r.source_entity_id
+                    const otherEntity = entities.find(e => e.id === otherId)
+                    const otherName = otherEntity?.name || `#${otherId}`
+                    return (
+                      <div key={r.id} style={{
+                        padding: '8px 12px', marginBottom: 6, borderRadius: 8,
+                        background: 'var(--bg-page)', border: '1px solid var(--border-light)',
+                        fontSize: 13, display: 'flex', alignItems: 'center', gap: 8,
+                      }}>
+                        <span style={{ fontWeight: 500 }}>{isSource ? selectedEntity.name : otherName}</span>
+                        <span style={{ color: 'var(--text-tertiary)' }}>→</span>
+                        <Tag color={relTypeMap[r.type]?.color} style={{ fontSize: 11 }}>{relTypeMap[r.type]?.text || r.type}</Tag>
+                        <span style={{ color: 'var(--text-tertiary)' }}>→</span>
+                        <span style={{ fontWeight: 500 }}>{isSource ? otherName : selectedEntity.name}</span>
+                        {r.confidence != null && r.confidence < 1 && (
+                          <span style={{ fontSize: 11, color: 'var(--text-tertiary)', marginLeft: 'auto' }}>置信度 {Math.round(r.confidence * 100)}%</span>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : <div style={{ color: 'var(--text-tertiary)', padding: 24, textAlign: 'center', background: 'var(--bg-page)', borderRadius: 8 }}>暂无关联关系，点击上方按钮添加</div>}
             </div>
           </div>
         )}
       </Drawer>
+
+      {/* ===== 文档编辑弹窗 ===== */}
+      <Modal
+        title={<span><EditOutlined style={{ marginRight: 8, color: 'var(--primary)' }} />编辑文档信息</span>}
+        open={!!editingDoc}
+        onCancel={() => setEditingDoc(null)}
+        onOk={handleSaveDoc}
+        okText="保存"
+        cancelText="取消"
+        destroyOnClose
+      >
+        <Form form={editDocForm} layout="vertical" style={{ marginTop: 16 }}>
+          <Form.Item name="filename" label="文件名" rules={[{ required: true, message: '请输入文件名' }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item name="tags" label="标签">
+            <Select mode="tags" placeholder="输入标签后回车" />
+          </Form.Item>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            <Form.Item name="device_model" label="设备型号">
+              <Input placeholder="例如：A320液压系统" />
+            </Form.Item>
+            <Form.Item name="source_level" label="来源级别">
+              <Select options={[
+                { value: 'official', label: '官方手册' },
+                { value: 'internal', label: '内部资料' },
+                { value: 'thirdparty', label: '第三方' },
+                { value: 'forum', label: '论坛/社区' },
+                { value: 'experience', label: '自录经验' },
+              ]} />
+            </Form.Item>
+          </div>
+          <Form.Item name="trust_level" label="可信度">
+            <InputNumber min={0} max={1} step={0.1} style={{ width: '100%' }} />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   )
 }

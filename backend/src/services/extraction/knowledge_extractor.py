@@ -22,21 +22,32 @@ from services.rag.rag_service import split_text_into_chunks
 @dataclass
 class ExtractedEntity:
     name: str
-    entity_type: str  # TOP_EVENT / MIDDLE_EVENT / BASIC_EVENT / DEVICE / COMPONENT
+    entity_type: str  # 参见 schemas.fta_schema.ENTITY_TYPE_KEYS
     description: str = ""
     device_type: str = ""
     confidence: float = 0.8
     evidence: str = ""
+    # ---- 工业 schema 扩展 ----
+    fault_code: str = ""
+    fault_mode: str = ""
+    severity: str = ""          # catastrophic / hazardous / major / minor / no_effect
+    detection_method: str = ""
+    parameter_name: str = ""
+    parameter_range: str = ""
+    maintenance_ref: str = ""
+    evidence_level: str = ""    # direct / inferred / assumed / none
 
 
 @dataclass
 class ExtractedRelation:
     source_name: str
     target_name: str
-    relation_type: str  # CAUSES / PART_OF / LOCATED_AT / AND_GATE / OR_GATE
+    relation_type: str  # 参见 schemas.fta_schema.RELATION_TYPE_KEYS
     logic_gate: str = ""  # AND / OR / XOR / ...
     confidence: float = 0.8
     evidence: str = ""
+    condition: str = ""
+    parameters: dict = None
 
 
 @dataclass
@@ -51,13 +62,18 @@ class ExtractionResult:
         return {
             "entities": [
                 {"name": e.name, "type": e.entity_type, "description": e.description,
-                 "device_type": e.device_type, "confidence": e.confidence}
+                 "device_type": e.device_type, "confidence": e.confidence,
+                 "fault_code": e.fault_code, "fault_mode": e.fault_mode,
+                 "severity": e.severity, "detection_method": e.detection_method,
+                 "parameter_name": e.parameter_name, "parameter_range": e.parameter_range,
+                 "maintenance_ref": e.maintenance_ref, "evidence_level": e.evidence_level}
                 for e in self.entities
             ],
             "relations": [
                 {"source": r.source_name, "target": r.target_name,
                  "type": r.relation_type, "logic_gate": r.logic_gate,
-                 "confidence": r.confidence}
+                 "confidence": r.confidence, "evidence": r.evidence,
+                 "condition": r.condition, "parameters": r.parameters}
                 for r in self.relations
             ],
             "statistics": self.statistics,
@@ -70,55 +86,75 @@ class ExtractionResult:
 # ---------------------------------------------------------------------------
 
 EXTRACTION_SYSTEM_PROMPT = """你是工业故障树分析(FTA)领域的知识抽取专家。
-你的任务是从工业文档中识别故障事件、设备部件信息，以及它们之间的因果关系和逻辑门规则。
+你的任务是从工业文档中识别故障事件、设备部件、故障模式、故障代码、监控参数和维修措施，
+以及它们之间的因果关系、逻辑门规则、隶属关系和运维关系。
 请始终输出有效的JSON格式。"""
 
-EXTRACTION_PROMPT_TEMPLATE = """请从以下文本中抽取故障树分析(FTA)相关的知识。
+EXTRACTION_PROMPT_TEMPLATE = """请从以下工业文档文本中抽取故障树分析(FTA)相关的结构化知识。
 
 【待分析文本】
 {text}
 
-【抽取要求】
-1. 识别所有故障事件实体：
-   - TOP_EVENT: 系统级顶层故障（如"登机梯系统故障"、"液压系统失效"）
-   - MIDDLE_EVENT: 中间过渡事件（如"回收功能故障"、"压力不足"）
-   - BASIC_EVENT: 最基本的故障原因/底事件（如"密封圈老化"、"传感器失灵"）
-   - DEVICE: 设备（如"液压泵"、"发动机"）
-   - COMPONENT: 部件（如"密封圈"、"阀门"、"传感器"）
+【实体类型定义】
+- TOP_EVENT: 系统级顶层故障（如"登机梯系统故障"、"液压系统失效"）
+- MIDDLE_EVENT: 中间过渡事件（如"回收功能故障"、"压力不足"）
+- BASIC_EVENT: 最基本的故障原因/底事件（如"密封圈老化"、"传感器失灵"）
+- SYSTEM: 一级功能系统（如"液压系统"、"电气系统"）
+- SUBSYSTEM: 二级子系统（如"液压动力单元"）
+- DEVICE: 设备/LRU（如"液压泵"、"发动机"）
+- COMPONENT: 部件/零件（如"密封圈"、"阀芯"）
+- FAULT_MODE: 故障模式（如"内漏"、"卡滞"、"断路"）
+- FAULT_CODE: 故障代码（如"HYD-2101"）
+- PARAMETER: 监控参数（如"液压压力"、"温度"）
+- MAINTENANCE_ACTION: 维修措施（如"更换密封圈"、"校准传感器"）
 
-2. 抽取实体间的关系：
-   - CAUSES: 因果关系（A导致B）
-   - PART_OF: 组成关系（A是B的一部分）
-   - LOCATED_AT: 位置关系
-   - AND_GATE: 与门关系（多个原因同时发生才导致结果）
-   - OR_GATE: 或门关系（任一原因发生就导致结果）
-
-3. 如果关系涉及逻辑门，请在logic_gate字段标注门类型(AND/OR/XOR/PRIORITY_AND/INHIBIT/VOTING)
+【关系类型定义】
+- CAUSES: 因果关系（A导致B）
+- AND_GATE: 与门（多原因同时→结果）
+- OR_GATE: 或门（任一原因→结果）
+- PART_OF: 组成关系（A是B的一部分）
+- LOCATED_AT: 位置关系
+- HAS_FAULT_MODE: 设备/部件→故障模式
+- HAS_FAULT_CODE: 事件→故障代码
+- MONITORED_BY: 设备/事件→监控参数
+- REPAIRED_BY: 故障→维修措施
 
 【输出格式】(严格JSON)
 {{
     "entities": [
         {{
             "name": "实体名称",
-            "type": "实体类型",
+            "type": "实体类型(上述之一)",
             "description": "简要描述",
-            "device_type": "所属设备类型（可选）",
-            "confidence": 0.9
+            "device_type": "所属设备类型(可选)",
+            "confidence": 0.9,
+            "fault_code": "故障代码(若有)",
+            "fault_mode": "故障模式(若有)",
+            "severity": "严重等级: catastrophic/hazardous/major/minor/no_effect(若能判断)",
+            "detection_method": "检测或调查方式(若有)",
+            "parameter_name": "监控参数名(若有)",
+            "parameter_range": "参数正常范围(若有)",
+            "maintenance_ref": "维修手册参考章节(若有)",
+            "evidence_level": "证据等级: direct/inferred/assumed"
         }}
     ],
     "relations": [
         {{
             "source": "源实体名称",
             "target": "目标实体名称",
-            "type": "关系类型",
-            "logic_gate": "逻辑门类型（可选，空字符串表示无）",
+            "type": "关系类型(上述之一)",
+            "logic_gate": "逻辑门类型(AND/OR/XOR等,无则空字符串)",
             "confidence": 0.85,
-            "evidence": "文本中的支撑证据片段"
+            "evidence": "文本中的支撑证据片段",
+            "condition": "触发条件(禁止门/表决门时填写,可选)"
         }}
     ]
 }}
 
-注意：只输出JSON，不要有其他内容。"""
+注意：
+- 只输出JSON，不要有其他内容
+- 尽可能填写工业扩展字段(fault_code, severity, detection_method等)，文本中未提及的字段留空字符串
+- evidence_level: 文本明确描述=direct, 可推断=inferred, 仅假设=assumed"""
 
 
 class KnowledgeExtractor:
@@ -232,6 +268,14 @@ class KnowledgeExtractor:
                 device_type=e.get("device_type", ""),
                 confidence=float(e.get("confidence", 0.8)),
                 evidence=text[:200],
+                fault_code=e.get("fault_code", "") or "",
+                fault_mode=e.get("fault_mode", "") or "",
+                severity=e.get("severity", "") or "",
+                detection_method=e.get("detection_method", "") or "",
+                parameter_name=e.get("parameter_name", "") or "",
+                parameter_range=e.get("parameter_range", "") or "",
+                maintenance_ref=e.get("maintenance_ref", "") or "",
+                evidence_level=e.get("evidence_level", "") or "",
             ))
 
         relations = []
@@ -243,6 +287,8 @@ class KnowledgeExtractor:
                 logic_gate=r.get("logic_gate", "") or "",
                 confidence=float(r.get("confidence", 0.8)),
                 evidence=r.get("evidence", ""),
+                condition=r.get("condition", "") or "",
+                parameters=r.get("parameters"),
             ))
 
         return entities, relations

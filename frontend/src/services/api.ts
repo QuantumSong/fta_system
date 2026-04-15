@@ -72,10 +72,23 @@ export const ftaApi = {
 
   generateFaultTree: (data: any): Promise<any> => apiClient.post('/fta/generate', data),
 
-  validateFaultTree: (structure: any): Promise<any> =>
-    apiClient.post('/validation/', { structure }),
+  validateFaultTree: (structure: any, opts?: {
+    device_type?: string; rule_config?: Record<string, any>; ignored_issues?: string[]
+  }): Promise<any> =>
+    apiClient.post('/validation/', { structure, ...opts }),
+
+  getValidationRules: (deviceType?: string): Promise<any> =>
+    apiClient.get('/validation/rules', { params: deviceType ? { device_type: deviceType } : {} }),
+
+  autoFixTree: (data: {
+    structure: any; issue_indices?: number[]; device_type?: string;
+    rule_config?: Record<string, any>; ignored_issues?: string[]
+  }): Promise<any> =>
+    apiClient.post('/validation/auto-fix', data),
 
   getSuggestions: (id: number): Promise<any> => apiClient.get(`/fta/${id}/suggestions`),
+
+  getEvidence: (treeId: number): Promise<any> => apiClient.get(`/fta/${treeId}/evidence`),
 }
 
 // 协作API
@@ -121,7 +134,14 @@ export const documentApi = {
 
   getDocument: (id: string): Promise<any> => apiClient.get(`/documents/${id}`),
 
-  deleteDocument: (id: string): Promise<any> => apiClient.delete(`/documents/${id}`),
+  updateDocument: (id: number, data: any): Promise<any> => apiClient.put(`/documents/${id}`, data),
+
+  deleteDocument: (id: string | number): Promise<any> => apiClient.delete(`/documents/${id}`),
+
+  getDocumentChunks: (id: number): Promise<any> => apiClient.get(`/documents/${id}/chunks`),
+
+  updateDocumentMetadata: (id: number, data: any): Promise<any> =>
+    apiClient.patch(`/multidoc/documents/${id}/metadata`, data),
 }
 
 // 知识抽取API
@@ -144,8 +164,8 @@ export const extractionApi = {
 
 // 知识图谱API
 export const knowledgeApi = {
-  searchEntities: (query: string, entityType?: string): Promise<any> =>
-    apiClient.get('/knowledge/entities/search', { params: { q: query, entity_type: entityType } }),
+  searchEntities: (query: string, entityType?: string, projectId?: number): Promise<any> =>
+    apiClient.get('/knowledge/entities/search', { params: { q: query, entity_type: entityType, ...(projectId != null ? { project_id: projectId } : {}) } }),
 
   getEntity: (id: number): Promise<any> => apiClient.get(`/knowledge/entities/${id}`),
 
@@ -153,6 +173,8 @@ export const knowledgeApi = {
     apiClient.get(`/knowledge/entities/${entityId}/relations`),
 
   createEntity: (data: any): Promise<any> => apiClient.post('/knowledge/entities', data),
+
+  updateEntity: (id: number, data: any): Promise<any> => apiClient.put(`/knowledge/entities/${id}`, data),
 
   createRelation: (data: any): Promise<any> => apiClient.post('/knowledge/relations', data),
 
@@ -179,6 +201,80 @@ export const projectApi = {
   updateProject: (id: number, data: any): Promise<any> => apiClient.put(`/projects/${id}`, data),
 
   deleteProject: (id: number): Promise<any> => apiClient.delete(`/projects/${id}`),
+}
+
+// 多文档联合建树API
+export const multidocApi = {
+  generate: (data: any): Promise<any> => apiClient.post('/multidoc/generate', data),
+
+  precheck: (data: any): Promise<any> => apiClient.post('/multidoc/precheck', data),
+
+  getTreeComposition: (treeId: number): Promise<any> =>
+    apiClient.get(`/multidoc/tree/${treeId}/composition`),
+
+  getTemplates: (projectId?: number): Promise<any> =>
+    apiClient.get('/multidoc/templates', { params: projectId ? { project_id: projectId } : {} }),
+
+  createTemplate: (data: any): Promise<any> => apiClient.post('/multidoc/templates', data),
+
+  updateTemplate: (id: number, data: any): Promise<any> =>
+    apiClient.put(`/multidoc/templates/${id}`, data),
+
+  deleteTemplate: (id: number): Promise<any> => apiClient.delete(`/multidoc/templates/${id}`),
+}
+
+// 专家模式API
+export const expertApi = {
+  listRules: (params?: {
+    scope?: string; project_id?: number; rule_type?: string;
+    enabled_only?: boolean; page?: number; page_size?: number
+  }): Promise<any> =>
+    apiClient.get('/expert-rules/', { params }),
+
+  getRule: (id: number): Promise<any> => apiClient.get(`/expert-rules/${id}`),
+
+  createRule: (data: any): Promise<any> => apiClient.post('/expert-rules/', data),
+
+  updateRule: (id: number, data: any): Promise<any> => apiClient.put(`/expert-rules/${id}`, data),
+
+  deleteRule: (id: number): Promise<any> => apiClient.delete(`/expert-rules/${id}`),
+
+  batchToggle: (ids: number[], enabled: boolean): Promise<any> =>
+    apiClient.post('/expert-rules/batch-toggle', { ids, enabled }),
+
+  getIgnoredSet: (projectId: number): Promise<any> =>
+    apiClient.get(`/expert-rules/ignored-set/${projectId}`),
+}
+
+// 指标评测API
+export const benchmarkApi = {
+  // 标准树
+  listGoldTrees: (params?: { project_id?: number; device_type?: string }): Promise<any> =>
+    apiClient.get('/benchmark/gold-trees', { params }),
+  getGoldTree: (id: number): Promise<any> => apiClient.get(`/benchmark/gold-trees/${id}`),
+  createGoldTree: (data: any): Promise<any> => apiClient.post('/benchmark/gold-trees', data),
+  updateGoldTree: (id: number, data: any): Promise<any> => apiClient.put(`/benchmark/gold-trees/${id}`, data),
+  deleteGoldTree: (id: number): Promise<any> => apiClient.delete(`/benchmark/gold-trees/${id}`),
+
+  // 评测运行
+  runEval: (data: any): Promise<any> => apiClient.post('/benchmark/run', data),
+  runAIEval: (data: any): Promise<any> => apiClient.post('/benchmark/ai-eval', data),
+  listRuns: (params?: any): Promise<any> => apiClient.get('/benchmark/runs', { params }),
+  getRun: (id: number): Promise<any> => apiClient.get(`/benchmark/runs/${id}`),
+  deleteRun: (id: number): Promise<any> => apiClient.delete(`/benchmark/runs/${id}`),
+
+  // 趋势
+  getTrend: (params?: { project_id?: number; device_type?: string; limit?: number }): Promise<any> =>
+    apiClient.get('/benchmark/trend', { params }),
+
+  // 导出
+  exportReport: (runId: number, fmt: string = 'json') =>
+    apiClient.get(`/benchmark/runs/${runId}/export`, { params: { fmt }, responseType: fmt === 'csv' ? 'blob' : 'json' }),
+}
+
+// 演示数据API
+export const demoApi = {
+  seedDemoData: (): Promise<any> => apiClient.post('/demo/seed'),
 }
 
 export default apiClient

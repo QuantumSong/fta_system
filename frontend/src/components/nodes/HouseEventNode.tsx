@@ -10,6 +10,7 @@ interface HouseEventNodeProps {
     nodeWidth?: number
     nodeHeight?: number
     onSizeChange?: (w: number, h: number) => void
+    evidenceLevel?: string
   }
   selected?: boolean
 }
@@ -52,7 +53,7 @@ const HouseEventNode: React.FC<HouseEventNodeProps> = ({ data, selected }) => {
   }
 
   return (
-    <NodeResizeWrapper selected={selected} width={data.nodeWidth || DEF_W} height={data.nodeHeight || DEF_H} minWidth={50} minHeight={40} onSizeChange={data.onSizeChange}>
+    <NodeResizeWrapper selected={selected} width={data.nodeWidth || DEF_W} height={data.nodeHeight || DEF_H} minWidth={50} minHeight={40} onSizeChange={data.onSizeChange} evidenceLevel={data.evidenceLevel}>
       {({ width, height }) => (
         <div
           className="fta-node fta-node-svg-shape"

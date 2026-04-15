@@ -15,7 +15,7 @@ import {
   SelectionMode,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { Button, Space, Card, Input, Form, Modal, message, Tooltip, Drawer, List, Tag, Popconfirm, Badge, Timeline, Progress, Segmented, Switch, Dropdown, Popover, Select, Slider, ColorPicker } from 'antd'
+import { Button, Space, Card, Input, Form, Modal, message, Tooltip, Drawer, List, Tag, Popconfirm, Badge, Timeline, Progress, Segmented, Switch, Dropdown, Popover, Select, Slider, ColorPicker, Descriptions, Alert, Tabs, Empty, Divider } from 'antd'
 import {
   DeleteOutlined,
   SaveOutlined,
@@ -42,11 +42,22 @@ import {
   FormatPainterOutlined,
   DragOutlined,
   SelectOutlined,
+  FileSearchOutlined,
+  SafetyCertificateOutlined,
+  FileTextOutlined,
+  WarningOutlined,
+  InfoCircleOutlined,
+  DownloadOutlined,
+  AuditOutlined,
+  BranchesOutlined,
+  ClockCircleOutlined,
+  UploadOutlined,
+  RightOutlined,
 } from '@ant-design/icons'
 import type { Connection, Node, Edge } from '@xyflow/react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { toPng } from 'html-to-image'
-import { ftaApi, collabApi } from '@/services/api'
+import { ftaApi, collabApi, documentApi, multidocApi, expertApi, projectApi } from '@/services/api'
 import useAuthStore from '@/stores/authStore'
 import useCollabWs from '@/hooks/useCollabWs'
 import TopEventNode from '@/components/nodes/TopEventNode'
@@ -62,6 +73,10 @@ import PriorityAndGateNode from '@/components/gates/PriorityAndGateNode'
 import InhibitGateNode from '@/components/gates/InhibitGateNode'
 import VotingGateNode from '@/components/gates/VotingGateNode'
 import TransferNode from '@/components/gates/TransferNode'
+import MultiDocWizard from '@/components/multidoc/MultiDocWizard'
+import DocCompositionPanel from '@/components/multidoc/DocCompositionPanel'
+import NodePropertyPanel from '@/components/NodePropertyPanel'
+import ValidationPanel, { type ValidationData } from '@/components/ValidationPanel'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const nodeTypes: Record<string, any> = {
@@ -220,12 +235,24 @@ const EditorInner: React.FC = () => {
   // 画布模式：选择 vs 拖拽
   const [panMode, setPanMode] = useState(false)
   const [isValidating, setIsValidating] = useState(false)
-  const [validationResult, setValidationResult] = useState<any>(null)
+  const [validationResult, setValidationResult] = useState<ValidationData | null>(null)
+  const [isAutoFixing, setIsAutoFixing] = useState(false)
+  const [fixProgress, setFixProgress] = useState(0)
+  const [ignoredIssues, setIgnoredIssues] = useState<Set<string>>(new Set())
   const [currentTreeId, setCurrentTreeId] = useState<number | null>(null)
   const [currentProjectId, setCurrentProjectId] = useState<number | null>(null)
+  const [autoSaveInterval, setAutoSaveInterval] = useState<number>(() => {
+    const stored = localStorage.getItem('fta_autosave_interval')
+    return stored ? Number(stored) : 60
+  })
+  const [autoSaveEnabled, setAutoSaveEnabled] = useState<boolean>(() => {
+    return localStorage.getItem('fta_autosave_enabled') !== 'false'
+  })
+  const [lastAutoSave, setLastAutoSave] = useState<string | null>(null)
+  const autoSaveTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const [form] = Form.useForm()
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
-  const { getNodes, screenToFlowPosition } = useReactFlow()
+  const { getNodes, getEdges, screenToFlowPosition } = useReactFlow()
 
   // 已保存故障树列表
   const [savedTreeDrawerOpen, setSavedTreeDrawerOpen] = useState(false)
@@ -237,12 +264,37 @@ const EditorInner: React.FC = () => {
   const [versions, setVersions] = useState<any[]>([])
   const [loadingVersions, setLoadingVersions] = useState(false)
 
+  // 证据追溯
+  const [evidenceData, setEvidenceData] = useState<any>(null)
+  const [evidenceDrawerOpen, setEvidenceDrawerOpen] = useState(false)
+  const [evidenceTarget, setEvidenceTarget] = useState<{ type: 'node' | 'edge'; id: string } | null>(null)
+  const [evidenceLoading, setEvidenceLoading] = useState(false)
+  const [chunkPreview, setChunkPreview] = useState<{ open: boolean; docId: number | null; docName: string; chunks: any[]; highlightChunkId: number | null }>({ open: false, docId: null, docName: '', chunks: [], highlightChunkId: null })
+
+  // 节点属性面板
+  const [propertyPanelOpen, setPropertyPanelOpen] = useState(false)
+  const [propertyPanelNode, setPropertyPanelNode] = useState<any>(null)
+
+  // 多文档联合建树
+  const [multiDocWizardOpen, setMultiDocWizardOpen] = useState(false)
+  const [docComposition, setDocComposition] = useState<any>(null)
+  const [docCompositionOpen, setDocCompositionOpen] = useState(false)
+
   // 协同工作 WebSocket
   const { token, user } = useAuthStore()
   const isRemoteUpdate = useRef(false)
+  const [collabEnabled, setCollabEnabled] = useState(false)
+
+  // 当 projectId 变化时，查询该项目是否开启协同
+  useEffect(() => {
+    if (!currentProjectId) { setCollabEnabled(false); return }
+    projectApi.getProject(currentProjectId).then((p: any) => {
+      setCollabEnabled(!!p?.collab_enabled)
+    }).catch(() => setCollabEnabled(false))
+  }, [currentProjectId])
 
   const { connected: wsConnected, onlineCount, sendTreeUpdate } = useCollabWs({
-    projectId: currentProjectId,
+    projectId: collabEnabled ? currentProjectId : null,
     token,
     username: user?.username || '匿名',
     onTreeUpdate: useCallback((msg: any) => {
@@ -257,10 +309,14 @@ const EditorInner: React.FC = () => {
           ...e,
           id: e.id || `e-${e.source}-${e.target}`,
         }))
-        setNodes(remoteNodes)
-        setEdges(remoteEdges)
+        setNodes([])
+        setEdges([])
+        requestAnimationFrame(() => {
+          setNodes(remoteNodes)
+          requestAnimationFrame(() => { setEdges(remoteEdges) })
+        })
         message.info(`${msg.from} 更新了故障树`, 2)
-        setTimeout(() => { isRemoteUpdate.current = false }, 100)
+        setTimeout(() => { isRemoteUpdate.current = false }, 200)
       }
     }, [setNodes, setEdges]),
     onUserJoin: useCallback((msg: any) => {
@@ -284,9 +340,30 @@ const EditorInner: React.FC = () => {
     }
   }, [searchParams])
 
+  const cacheRestoredRef = useRef(false)
   useEffect(() => {
     if (treeId) {
       loadFaultTree(treeId)
+    } else if (!cacheRestoredRef.current) {
+      // 没有 treeId 时尝试从缓存恢复画布（仅执行一次）
+      const cached = sessionStorage.getItem('fta_canvas_cache')
+      if (cached) {
+        try {
+          const { nodes: cn, edges: ce, treeId: ct, projectId: cp } = JSON.parse(cached)
+          if (cn?.length > 0) {
+            cacheRestoredRef.current = true
+            setNodes([])
+            setEdges([])
+            requestAnimationFrame(() => {
+              setNodes(cn)
+              requestAnimationFrame(() => { setEdges(ce || []) })
+            })
+            if (ct) setCurrentTreeId(ct)
+            if (cp) setCurrentProjectId(cp)
+            message.info('已恢复上次编辑的画布', 2)
+          }
+        } catch {}
+      }
     }
   }, [treeId])
 
@@ -350,27 +427,31 @@ const EditorInner: React.FC = () => {
     }
   }
 
-  // 给节点注入 onLabelChange / onSizeChange 回调
-  const nodesWithCallbacks = nodes.map((node) => ({
-    ...node,
-    data: {
-      ...node.data,
-      onLabelChange: (newLabel: string) => {
-        setNodes((nds) =>
-          nds.map((n) =>
-            n.id === node.id ? { ...n, data: { ...n.data, label: newLabel } } : n
+  // 给节点注入 onLabelChange / onSizeChange / evidenceLevel 回调
+  const nodesWithCallbacks = nodes.map((node) => {
+    const evLevel = evidenceData?.node_evidence?.[node.id]?.evidence_level
+    return {
+      ...node,
+      data: {
+        ...node.data,
+        evidenceLevel: evLevel || undefined,
+        onLabelChange: (newLabel: string) => {
+          setNodes((nds) =>
+            nds.map((n) =>
+              n.id === node.id ? { ...n, data: { ...n.data, label: newLabel } } : n
+            )
           )
-        )
-      },
-      onSizeChange: (w: number, h: number) => {
-        setNodes((nds) =>
-          nds.map((n) =>
-            n.id === node.id ? { ...n, data: { ...n.data, nodeWidth: w, nodeHeight: h } } : n
+        },
+        onSizeChange: (w: number, h: number) => {
+          setNodes((nds) =>
+            nds.map((n) =>
+              n.id === node.id ? { ...n, data: { ...n.data, nodeWidth: w, nodeHeight: h } } : n
+            )
           )
-        )
+        },
       },
-    },
-  }))
+    }
+  })
 
   const loadFaultTree = async (id: string) => {
     try {
@@ -385,9 +466,19 @@ const EditorInner: React.FC = () => {
           ...e,
           id: e.id || `e-${e.source}-${e.target}`,
         }))
-        setNodes(loadedNodes)
-        setEdges(loadedEdges)
+        // 先清空再设置节点，确保 ReactFlow 内部 store 同步
+        setNodes([])
+        setEdges([])
+        // 延迟一帧设置节点，再延迟一帧设置边，避免 ReactFlow 因节点未注册而丢弃边
+        requestAnimationFrame(() => {
+          setNodes(loadedNodes)
+          requestAnimationFrame(() => {
+            setEdges(loadedEdges)
+          })
+        })
         setCurrentTreeId(data.id)
+        setEvidenceData(null)
+        setDocComposition(data.doc_composition || null)
         if (data.project_id) {
           setCurrentProjectId(data.project_id)
         }
@@ -488,6 +579,7 @@ const EditorInner: React.FC = () => {
   const handlePaneClick = useCallback((event: React.MouseEvent) => {
     setContextMenu(null)
     setEdgeContextMenu(null)
+    setPropertyPanelOpen(false)
     if (pendingNodeType) {
       const position = screenToFlowPosition({ x: event.clientX, y: event.clientY })
       handleAddNode(pendingNodeType, position)
@@ -513,9 +605,27 @@ const EditorInner: React.FC = () => {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [pendingNodeType])
 
+  // ---- 节点属性面板 ----
+  // 保持 propertyPanelNode 与最新 nodes 数据同步
+  useEffect(() => {
+    if (propertyPanelNode) {
+      const latest = nodes.find(n => n.id === propertyPanelNode.id)
+      if (latest && latest.data !== propertyPanelNode.data) {
+        setPropertyPanelNode(latest)
+      }
+    }
+  }, [nodes, propertyPanelNode])
+
+  const handleNodePropertyChange = useCallback((nodeId: string, data: Record<string, any>) => {
+    setNodes(nds => nds.map(n => n.id === nodeId ? { ...n, data: { ...n.data, ...data } } : n))
+  }, [setNodes])
+
   // ---- 快捷连接: 点两个节点自动连线 ----
   const handleNodeClickForConnect = useCallback((_event: React.MouseEvent, node: Node) => {
     setContextMenu(null)
+    // 打开属性面板
+    setPropertyPanelNode(node)
+    setPropertyPanelOpen(true)
     if (!quickConnectEnabled) return
     if (!quickConnectSource) {
       // 检查该节点是否还能连出新边（是否存在至少一个未连接的目标）
@@ -687,12 +797,13 @@ const EditorInner: React.FC = () => {
   // ---- 自动布局 (树形 top-down) ----
   const handleAutoLayout = useCallback(() => {
     const currentNodes = getNodes()
+    const currentEdges = getEdges()
     if (currentNodes.length === 0) { message.warning('画布为空'); return }
     // 构建邻接表
     const children: Record<string, string[]> = {}
     const hasParent = new Set<string>()
     currentNodes.forEach(n => { children[n.id] = [] })
-    edges.forEach(e => {
+    currentEdges.forEach(e => {
       if (children[e.source]) children[e.source].push(e.target)
       hasParent.add(e.target)
     })
@@ -726,7 +837,7 @@ const EditorInner: React.FC = () => {
     })
     setNodes(nds => nds.map(n => positions[n.id] ? { ...n, position: positions[n.id] } : n))
     message.success('自动布局完成', 1)
-  }, [edges, getNodes, setNodes])
+  }, [getNodes, getEdges, setNodes])
 
   // ---- 对齐工具 ----
   const handleAlignCenter = useCallback(() => {
@@ -762,12 +873,14 @@ const EditorInner: React.FC = () => {
   }, [nodes, setNodes])
 
   // ---- 全局键盘快捷键 ----
+  const handleSaveRef = useRef<() => void>(() => {})
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // 不在输入框中时才响应
       const tag = (e.target as HTMLElement)?.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA') return
       if (e.ctrlKey || e.metaKey) {
+        if (e.key === 's') { e.preventDefault(); handleSaveRef.current() }
         if (e.key === 'c') { e.preventDefault(); handleCopy(false) }
         if (e.key === 'x') { e.preventDefault(); handleCopy(true) }
         if (e.key === 'v') { e.preventDefault(); handlePaste() }
@@ -828,6 +941,50 @@ const EditorInner: React.FC = () => {
       message.error('保存失败')
     }
   }
+  handleSaveRef.current = handleSave
+
+  // ---- 画布缓存：每次 nodes/edges 变化时写入 sessionStorage ----
+  useEffect(() => {
+    // 防止初始空状态覆盖缓存
+    if (nodes.length === 0 && edges.length === 0) return
+    const cacheData = {
+      nodes: nodes.map(n => ({ id: n.id, type: n.type, position: n.position, data: n.data })),
+      edges: edges.map(e => ({ id: e.id, source: e.source, target: e.target })),
+      treeId: currentTreeId,
+      projectId: currentProjectId,
+      ts: Date.now(),
+    }
+    sessionStorage.setItem('fta_canvas_cache', JSON.stringify(cacheData))
+  }, [nodes, edges, currentTreeId, currentProjectId])
+
+  // ---- 自动保存定时器 ----
+  useEffect(() => {
+    if (autoSaveTimerRef.current) clearInterval(autoSaveTimerRef.current)
+    if (!autoSaveEnabled || autoSaveInterval <= 0) return
+    autoSaveTimerRef.current = setInterval(async () => {
+      const currentNodes = getNodes()
+      if (currentNodes.length === 0) return
+      if (!currentTreeId) return // 只对已保存过的树自动保存
+      try {
+        const structure = {
+          nodes: currentNodes.map(n => ({ id: n.id, type: n.type, position: n.position, data: n.data })),
+          links: edges.map(e => ({ id: e.id, source: e.source, target: e.target })),
+        }
+        await ftaApi.saveFaultTree({ id: currentTreeId, structure, project_id: currentProjectId })
+        setLastAutoSave(new Date().toLocaleTimeString('zh-CN'))
+      } catch {
+        // 自动保存静默失败，不打扰用户
+        console.warn('自动保存失败')
+      }
+    }, autoSaveInterval * 1000)
+    return () => { if (autoSaveTimerRef.current) clearInterval(autoSaveTimerRef.current) }
+  }, [autoSaveEnabled, autoSaveInterval, currentTreeId, currentProjectId, edges, getNodes])
+
+  // 持久化自动保存设置
+  useEffect(() => {
+    localStorage.setItem('fta_autosave_interval', String(autoSaveInterval))
+    localStorage.setItem('fta_autosave_enabled', String(autoSaveEnabled))
+  }, [autoSaveInterval, autoSaveEnabled])
 
   // 版本历史
   const loadVersions = async () => {
@@ -896,8 +1053,12 @@ const EditorInner: React.FC = () => {
           ...e,
           id: e.id || `e-${e.source}-${e.target}`,
         }))
-        setNodes(genNodes)
-        setEdges(genEdges)
+        setNodes([])
+        setEdges([])
+        requestAnimationFrame(() => {
+          setNodes(genNodes)
+          requestAnimationFrame(() => { setEdges(genEdges) })
+        })
         if (result.tree_id) {
           setCurrentTreeId(result.tree_id)
         }
@@ -928,33 +1089,279 @@ const EditorInner: React.FC = () => {
     }
   }
 
+  // 多文档联合建树结果回调
+  const handleMultiDocGenerated = useCallback((result: any) => {
+    setMultiDocWizardOpen(false)
+    if (result.structure) {
+      const genNodes = (result.structure.nodes || []).map((n: any) => ({
+        ...n,
+        position: n.position || { x: 0, y: 0 },
+        data: n.data || { label: n.name || '未命名' },
+      }))
+      const genEdges = (result.structure.links || []).map((e: any) => ({
+        ...e,
+        id: e.id || `e-${e.source}-${e.target}`,
+      }))
+      setNodes([])
+      setEdges([])
+      requestAnimationFrame(() => {
+        setNodes(genNodes)
+        requestAnimationFrame(() => { setEdges(genEdges) })
+      })
+      if (result.tree_id) setCurrentTreeId(result.tree_id)
+      if (result.doc_composition) setDocComposition(result.doc_composition)
+    }
+  }, [setNodes, setEdges])
+
+  // 手动刷新文档构成（用于已有树未内联 doc_composition 的情况）
+  useEffect(() => {
+    if (currentTreeId && !docComposition) {
+      multidocApi.getTreeComposition(currentTreeId).then((res: any) => {
+        if (res && res.documents && res.documents.length > 0) {
+          setDocComposition(res)
+        }
+      }).catch(() => { /* no composition */ })
+    }
+  }, [currentTreeId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const _buildStructure = useCallback(() => ({
+    nodes: nodes.map((n) => ({
+      id: n.id, type: n.type, data: n.data,
+      name: (n.data as any)?.label,
+    })),
+    links: edges.map((e) => ({
+      id: e.id, source: e.source, target: e.target,
+    })),
+  }), [nodes, edges])
+
   const handleValidate = async () => {
     try {
       setIsValidating(true)
-      const structure = {
-        nodes: nodes.map((n) => ({
-          id: n.id,
-          type: n.type,
-          data: n.data,
-          name: (n.data as any)?.label,
-        })),
-        links: edges.map((e) => ({
-          source: e.source,
-          target: e.target,
-        })),
+      // 合并专家库忽略规则
+      let mergedIgnored = [...ignoredIssues]
+      if (currentProjectId) {
+        try {
+          const eset: any = await expertApi.getIgnoredSet(currentProjectId)
+          if (eset?.ignored_issues) mergedIgnored = [...new Set([...mergedIgnored, ...eset.ignored_issues])]
+        } catch { /* ignore */ }
       }
-      const result: any = await ftaApi.validateFaultTree(structure)
+      const structure = _buildStructure()
+      const result: any = await ftaApi.validateFaultTree(structure, {
+        ignored_issues: mergedIgnored,
+      })
       setValidationResult(result)
-      if (result.is_valid) {
-        message.success('校验通过')
+      if (result.is_valid && (result.issues?.length || 0) === 0) {
+        message.success(`校验通过，质量分数 ${result.quality_score ?? 100}`)
       } else {
-        message.warning(`发现 ${result.issues?.length || 0} 个问题`)
+        message.warning(`发现 ${result.issues?.length || 0} 个问题，质量分数 ${result.quality_score ?? '—'}`)
       }
     } catch {
       message.error('校验失败')
     } finally {
       setIsValidating(false)
     }
+  }
+
+  const handleIgnoreIssue = useCallback(async (ruleId: string, nodeId?: string) => {
+    const key = nodeId ? `${ruleId}::${nodeId}` : ruleId
+    setIgnoredIssues(prev => {
+      const next = new Set(prev)
+      next.add(key)
+      return next
+    })
+    // 同步持久化到专家模式
+    try {
+      await expertApi.createRule({
+        name: `忽略 ${ruleId}${nodeId ? ` (${nodeId})` : ''}`,
+        description: '从校验面板一键忽略',
+        rule_type: 'ignore',
+        scope: currentProjectId ? 'project' : 'global',
+        project_id: currentProjectId || undefined,
+        target_rule_id: ruleId,
+        target_node_pattern: nodeId || undefined,
+        priority: 0,
+        enabled: true,
+      })
+      message.success('已忽略该问题，已同步至专家模式规则库')
+    } catch {
+      message.info('已忽略该问题，重新校验后生效')
+    }
+  }, [currentProjectId])
+
+  const handleAutoFix = useCallback(async (issueIndices: number[]) => {
+    try {
+      setIsAutoFixing(true)
+      setFixProgress(5)
+      const structure = _buildStructure()
+      // 模拟进度：发请求前先推到 20%
+      setFixProgress(20)
+      const progressTimer = setInterval(() => {
+        setFixProgress(prev => prev < 85 ? prev + Math.random() * 8 : prev)
+      }, 800)
+
+      const res: any = await ftaApi.autoFixTree({
+        structure, issue_indices: issueIndices,
+        ignored_issues: [...ignoredIssues],
+      })
+
+      clearInterval(progressTimer)
+      setFixProgress(90)
+
+      if (res.fixed && res.structure) {
+        // 应用修复后的结构
+        const fixedNodes = (res.structure.nodes || []).map((n: any, i: number) => ({
+          id: n.id,
+          type: n.type || 'basicEvent',
+          position: n.position || { x: 200 + (i % 5) * 200, y: 100 + Math.floor(i / 5) * 160 },
+          data: n.data || { label: n.name || '' },
+        }))
+        const fixedEdges = (res.structure.links || []).map((lk: any, i: number) => ({
+          id: lk.id || `fix-edge-${i}`,
+          source: lk.source,
+          target: lk.target,
+        }))
+        setNodes([])
+        setEdges([])
+        requestAnimationFrame(() => {
+          setNodes(fixedNodes)
+          requestAnimationFrame(() => { setEdges(fixedEdges) })
+        })
+        setFixProgress(95)
+        // 自动树形布局
+        setTimeout(() => {
+          handleAutoLayout()
+          setFixProgress(100)
+          message.success(`AI 修复完成：${res.issues_before} → ${res.issues_after} 个问题，分数 ${res.score_before} → ${res.score_after}`)
+          // 自动重新校验
+          setTimeout(handleValidate, 600)
+          setTimeout(() => setFixProgress(0), 1500)
+        }, 200)
+      } else {
+        setFixProgress(0)
+        message.warning(res.reason || 'AI 无法自动修复')
+      }
+    } catch {
+      setFixProgress(0)
+      message.error('AI 自动修复失败')
+    } finally {
+      setIsAutoFixing(false)
+    }
+  }, [_buildStructure, ignoredIssues, setNodes, setEdges, handleAutoLayout]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleLocateNode = useCallback((nodeId: string) => {
+    const target = nodes.find(n => n.id === nodeId)
+    if (target) {
+      setNodes(nds => nds.map(n => ({ ...n, selected: n.id === nodeId })))
+      // 打开属性面板
+      setPropertyPanelNode(target)
+      setPropertyPanelOpen(true)
+    }
+  }, [nodes, setNodes])
+
+  // ---- 证据追溯 ----
+  const loadEvidence = async () => {
+    if (!currentTreeId) {
+      message.warning('请先保存故障树后再查看证据')
+      return null
+    }
+    try {
+      setEvidenceLoading(true)
+      const data: any = await ftaApi.getEvidence(currentTreeId)
+      setEvidenceData(data)
+      return data
+    } catch {
+      message.error('加载证据失败')
+      return null
+    } finally {
+      setEvidenceLoading(false)
+    }
+  }
+
+  const handleNodeEvidence = async (nodeId: string) => {
+    if (!currentTreeId) { message.warning('请先保存故障树'); return }
+    const data = evidenceData || await loadEvidence()
+    if (!data) return
+    setEvidenceTarget({ type: 'node', id: nodeId })
+    setEvidenceDrawerOpen(true)
+  }
+
+  const handleEdgeEvidence = async (edgeId: string) => {
+    if (!currentTreeId) return
+    const data = evidenceData || await loadEvidence()
+    if (!data) return
+    setEvidenceTarget({ type: 'edge', id: edgeId })
+    setEvidenceDrawerOpen(true)
+  }
+
+  const handleEvidenceJump = async (docId: number, docName: string, chunkId?: number | null) => {
+    if (!docId) { message.warning('无关联文档'); return }
+    try {
+      const res: any = await documentApi.getDocumentChunks(docId)
+      setChunkPreview({ open: true, docId, docName: docName || res.filename, chunks: res.chunks || [], highlightChunkId: chunkId || null })
+      if (chunkId) {
+        setTimeout(() => {
+          const el = document.getElementById(`chunk-${chunkId}`)
+          el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        }, 300)
+      }
+    } catch {
+      message.error('加载文档片段失败')
+    }
+  }
+
+  const handleExportEvidenceTable = async () => {
+    const data = evidenceData || await loadEvidence()
+    if (!data) return
+    const nodeEv = data.node_evidence || {}
+    const edgeEv = data.edge_evidence || {}
+
+    const LEVEL_LABEL: Record<string, string> = { none: '无证据', single: '单证据', strong: '强证据', multi_doc: '多文档证据' }
+    const TYPE_LABEL: Record<string, string> = {
+      topEvent: '顶事件', middleEvent: '中间事件', basicEvent: '底事件',
+      houseEvent: '外部事件', undevelopedEvent: '未展开事件',
+      andGate: '与门', orGate: '或门', notGate: '非门', xorGate: '异或门',
+      priorityAndGate: '优先与门', inhibitGate: '禁止门', votingGate: '表决门', transferSymbol: '转移符号',
+    }
+
+    let csv = '\uFEFF类型,ID,名称,节点/边类型,证据等级,来源数量,来源文档,置信度,证据文本\n'
+    for (const nid of Object.keys(nodeEv)) {
+      const ne = nodeEv[nid]
+      const docs = (ne.sources || []).map((s: any) => s.document_name || '').filter(Boolean).join('; ')
+      const confs = (ne.sources || []).map((s: any) => s.confidence ?? '').join('; ')
+      const texts = (ne.sources || []).map((s: any) => (s.evidence_text || '').replace(/[\n\r,]/g, ' ').slice(0, 100)).join('; ')
+      csv += `节点,${nid},"${ne.label}",${TYPE_LABEL[ne.node_type] || ne.node_type},${LEVEL_LABEL[ne.evidence_level] || ne.evidence_level},${(ne.sources || []).length},"${docs}","${confs}","${texts}"\n`
+    }
+    for (const eid of Object.keys(edgeEv)) {
+      const ee = edgeEv[eid]
+      const docs = (ee.sources || []).map((s: any) => s.document_name || '').filter(Boolean).join('; ')
+      const confs = (ee.sources || []).map((s: any) => s.confidence ?? '').join('; ')
+      const texts = (ee.sources || []).map((s: any) => (s.evidence_text || '').replace(/[\n\r,]/g, ' ').slice(0, 100)).join('; ')
+      const relTypes = (ee.sources || []).map((s: any) => s.relation_type || '').join('; ')
+      csv += `边,${eid},"${ee.source_node} → ${ee.target_node}","${relTypes}",${LEVEL_LABEL[ee.evidence_level] || ee.evidence_level},${(ee.sources || []).length},"${docs}","${confs}","${texts}"\n`
+    }
+
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `证据清单_${new Date().toLocaleDateString()}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+    message.success('证据清单已导出')
+  }
+
+  // 当前证据数据
+  const currentEvidence = evidenceTarget
+    ? evidenceTarget.type === 'node'
+      ? evidenceData?.node_evidence?.[evidenceTarget.id]
+      : evidenceData?.edge_evidence?.[evidenceTarget.id]
+    : null
+
+  const EVIDENCE_LEVEL_CONFIG: Record<string, { color: string; label: string; icon: React.ReactNode }> = {
+    none: { color: '#d9d9d9', label: '无证据', icon: <WarningOutlined style={{ color: '#bfbfbf' }} /> },
+    single: { color: '#faad14', label: '单证据', icon: <FileTextOutlined style={{ color: '#faad14' }} /> },
+    strong: { color: '#52c41a', label: '强证据', icon: <SafetyCertificateOutlined style={{ color: '#52c41a' }} /> },
+    multi_doc: { color: '#1890ff', label: '多文档证据', icon: <AuditOutlined style={{ color: '#1890ff' }} /> },
   }
 
   const handleExportImage = async () => {
@@ -991,11 +1398,412 @@ const EditorInner: React.FC = () => {
     }
   }
 
+  // ---- 多格式导出 ----
+  const buildExportStructure = () => {
+    const currentNodes = getNodes()
+    if (currentNodes.length === 0) { message.warning('画布为空，无法导出'); return null }
+    return {
+      nodes: currentNodes.map(n => ({ id: n.id, type: n.type, position: n.position, data: n.data })),
+      links: edges.map(e => ({ id: e.id, source: e.source, target: e.target })),
+    }
+  }
+
+  const handleExportJSON = () => {
+    const structure = buildExportStructure()
+    if (!structure) return
+    const topNode = structure.nodes.find(n => n.type === 'topEvent')
+    const json = JSON.stringify({
+      format: 'fta-system-v1',
+      name: (topNode?.data as any)?.label || '未命名故障树',
+      exportedAt: new Date().toISOString(),
+      treeId: currentTreeId,
+      projectId: currentProjectId,
+      structure,
+    }, null, 2)
+    const blob = new Blob([json], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `故障树_${new Date().toLocaleDateString()}.json`; a.click()
+    URL.revokeObjectURL(url)
+    message.success('JSON 导出成功')
+  }
+
+  const handleExportOpenPSA = () => {
+    const structure = buildExportStructure()
+    if (!structure) return
+    const topNode = structure.nodes.find(n => n.type === 'topEvent')
+    const topName = (topNode?.data as any)?.label || 'TopEvent'
+    // 构建 OpenPSA MEF XML
+    let xml = `<?xml version="1.0" encoding="UTF-8"?>\n`
+    xml += `<opsa-mef>\n  <define-fault-tree name="${topName}">\n`
+    // 递归构建门和事件
+    const nodeMap = new Map(structure.nodes.map(n => [n.id, n]))
+    const childrenMap = new Map<string, string[]>()
+    structure.links.forEach(l => {
+      const kids = childrenMap.get(l.source) || []
+      kids.push(l.target)
+      childrenMap.set(l.source, kids)
+    })
+    const gateTypeMap: Record<string, string> = { andGate: 'and', orGate: 'or', notGate: 'not', xorGate: 'xor', priorityAndGate: 'and', inhibitGate: 'inhibit', votingGate: 'atleast' }
+    const visited = new Set<string>()
+    const emitNode = (id: string, indent: string): string => {
+      if (visited.has(id)) return ''
+      visited.add(id)
+      const node = nodeMap.get(id)
+      if (!node) return ''
+      const label = ((node.data as any)?.label || id).replace(/[<>&"]/g, '_')
+      const children = childrenMap.get(id) || []
+      const isGate = node.type && gateTypeMap[node.type]
+      if (isGate && children.length > 0) {
+        const gateTag = gateTypeMap[node.type!]
+        let out = `${indent}<define-gate name="${label}">\n${indent}  <${gateTag}>\n`
+        children.forEach(cid => {
+          const cnode = nodeMap.get(cid)
+          if (!cnode) return
+          const clabel = ((cnode.data as any)?.label || cid).replace(/[<>&"]/g, '_')
+          const cchildren = childrenMap.get(cid) || []
+          if (cnode.type && gateTypeMap[cnode.type] && cchildren.length > 0) {
+            out += `${indent}    <gate name="${clabel}"/>\n`
+          } else {
+            out += `${indent}    <basic-event name="${clabel}"/>\n`
+          }
+        })
+        out += `${indent}  </${gateTag}>\n${indent}</define-gate>\n`
+        children.forEach(cid => { out += emitNode(cid, indent) })
+        return out
+      } else if (children.length === 0) {
+        return `${indent}<define-basic-event name="${label}"/>\n`
+      }
+      return ''
+    }
+    if (topNode) xml += emitNode(topNode.id, '    ')
+    xml += `  </define-fault-tree>\n</opsa-mef>\n`
+    const blob = new Blob([xml], { type: 'application/xml' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `故障树_${new Date().toLocaleDateString()}.xml`; a.click()
+    URL.revokeObjectURL(url)
+    message.success('OpenPSA XML 导出成功')
+  }
+
+  const handleExportCSV = () => {
+    const structure = buildExportStructure()
+    if (!structure) return
+    let csv = '\uFEFF'  // BOM for Excel
+    csv += '类型,ID,名称,层级\n'
+    // BFS compute levels
+    const childrenMap = new Map<string, string[]>()
+    structure.links.forEach(l => {
+      const kids = childrenMap.get(l.source) || []
+      kids.push(l.target)
+      childrenMap.set(l.source, kids)
+    })
+    const parentSet = new Set(structure.links.map(l => l.target))
+    const roots = structure.nodes.filter(n => !parentSet.has(n.id))
+    const levels = new Map<string, number>()
+    const queue = roots.map(r => { levels.set(r.id, 0); return r.id })
+    while (queue.length > 0) {
+      const cur = queue.shift()!
+      const lvl = levels.get(cur) || 0
+      ;(childrenMap.get(cur) || []).forEach(cid => { if (!levels.has(cid)) { levels.set(cid, lvl + 1); queue.push(cid) } })
+    }
+    structure.nodes.forEach(n => {
+      const label = ((n.data as any)?.label || '').replace(/,/g, '，')
+      csv += `${LABEL_MAP[n.type || ''] || n.type},${n.id},${label},${levels.get(n.id) ?? '—'}\n`
+    })
+    csv += '\n边: 源ID,目标ID\n'
+    structure.links.forEach(l => { csv += `${l.source},${l.target}\n` })
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `故障树_${new Date().toLocaleDateString()}.csv`; a.click()
+    URL.revokeObjectURL(url)
+    message.success('CSV 导出成功')
+  }
+
+  const exportMenuItems = [
+    { key: 'png', label: 'PNG 图片', icon: <ExportOutlined />, onClick: handleExportImage },
+    { key: 'json', label: 'JSON 结构', icon: <FileTextOutlined />, onClick: handleExportJSON },
+    { key: 'xml', label: 'OpenPSA XML', icon: <FileTextOutlined />, onClick: handleExportOpenPSA },
+    { key: 'csv', label: 'CSV 表格', icon: <DownloadOutlined />, onClick: handleExportCSV },
+  ]
+
+  // ---- 导入故障树 ----
+  const importFileRef = useRef<HTMLInputElement>(null)
+
+  const parseOpenPSAXml = (xmlStr: string): { nodes: any[]; links: any[] } | null => {
+    try {
+      const parser = new DOMParser()
+      const doc = parser.parseFromString(xmlStr, 'application/xml')
+      if (doc.querySelector('parsererror')) return null
+
+      const nodes: any[] = []
+      const links: any[] = []
+      let nodeIdx = 0
+      const nameToId = new Map<string, string>()
+
+      const gateTagToType: Record<string, string> = {
+        and: 'andGate', or: 'orGate', not: 'notGate', xor: 'xorGate', atleast: 'votingGate', inhibit: 'inhibitGate',
+      }
+
+      const ensureNode = (name: string, type: string, depth: number) => {
+        if (nameToId.has(name)) return nameToId.get(name)!
+        const id = `imp_${nodeIdx++}`
+        nameToId.set(name, id)
+        nodes.push({ id, type, position: { x: 0, y: depth * 140 }, data: { label: name } })
+        return id
+      }
+
+      // 遍历 define-gate
+      const gates = doc.querySelectorAll('define-gate')
+      gates.forEach((gate) => {
+        const gateName = gate.getAttribute('name') || `gate_${nodeIdx}`
+        // 判断门类型
+        let gateType = 'orGate'
+        for (const tag of Object.keys(gateTagToType)) {
+          if (gate.querySelector(`:scope > ${tag}`)) { gateType = gateTagToType[tag]; break }
+        }
+        const depth = gate.closest('define-fault-tree') ? 1 : 2
+        const gateId = ensureNode(gateName, gateType, depth)
+
+        // 子元素
+        const gateEl = gate.querySelector('and, or, not, xor, atleast, inhibit')
+        if (gateEl) {
+          gateEl.querySelectorAll(':scope > gate, :scope > basic-event, :scope > house-event, :scope > undeveloped-event').forEach(child => {
+            const childName = child.getAttribute('name') || `node_${nodeIdx}`
+            let childType = 'basicEvent'
+            if (child.tagName === 'gate') childType = 'middleEvent'
+            else if (child.tagName === 'house-event') childType = 'houseEvent'
+            else if (child.tagName === 'undeveloped-event') childType = 'undevelopedEvent'
+            const childId = ensureNode(childName, childType, depth + 1)
+            links.push({ id: `e_${links.length}`, source: gateId, target: childId })
+          })
+        }
+      })
+
+      // 如果有 define-fault-tree name → 作为顶事件
+      const ftEl = doc.querySelector('define-fault-tree')
+      if (ftEl) {
+        const topName = ftEl.getAttribute('name') || '顶事件'
+        const topId = ensureNode(topName, 'topEvent', 0)
+        // 链接到第一个 gate
+        if (gates.length > 0) {
+          const firstGateName = gates[0].getAttribute('name') || ''
+          const firstGateId = nameToId.get(firstGateName)
+          if (firstGateId && firstGateId !== topId) {
+            links.push({ id: `e_${links.length}`, source: topId, target: firstGateId })
+          }
+        }
+      }
+
+      if (nodes.length === 0) return null
+      return { nodes, links }
+    } catch { return null }
+  }
+
+  const autoLayout = (structure: { nodes: any[]; links: any[] }) => {
+    // 简单层级自动布局
+    const childrenMap = new Map<string, string[]>()
+    structure.links.forEach(l => {
+      const kids = childrenMap.get(l.source) || []
+      kids.push(l.target)
+      childrenMap.set(l.source, kids)
+    })
+    const parentSet = new Set(structure.links.map(l => l.target))
+    const roots = structure.nodes.filter(n => !parentSet.has(n.id))
+    const levels = new Map<string, number>()
+    const queue = roots.map(r => { levels.set(r.id, 0); return r.id })
+    while (queue.length > 0) {
+      const cur = queue.shift()!
+      const lvl = levels.get(cur) || 0
+      ;(childrenMap.get(cur) || []).forEach(cid => {
+        if (!levels.has(cid)) { levels.set(cid, lvl + 1); queue.push(cid) }
+      })
+    }
+    // 按层分组
+    const byLevel = new Map<number, string[]>()
+    structure.nodes.forEach(n => {
+      const lv = levels.get(n.id) ?? 0
+      const arr = byLevel.get(lv) || []
+      arr.push(n.id)
+      byLevel.set(lv, arr)
+    })
+    const nodeMap = new Map(structure.nodes.map(n => [n.id, n]))
+    const H_GAP = 180, V_GAP = 140
+    byLevel.forEach((ids, lv) => {
+      const totalW = (ids.length - 1) * H_GAP
+      const startX = 400 - totalW / 2
+      ids.forEach((id, i) => {
+        const node = nodeMap.get(id)
+        if (node) node.position = { x: startX + i * H_GAP, y: lv * V_GAP }
+      })
+    })
+    return structure
+  }
+
+  const handleImportTree = (file: File) => {
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      const content = e.target?.result as string
+      if (!content) { message.error('文件读取失败'); return }
+
+      let imported: { nodes: any[]; links: any[] } | null = null
+      const fileName = file.name.toLowerCase()
+
+      // 解析 nodeList/linkList 格式（第三方FTA工具导出）
+      const parseNodeListFormat = (json: any): { nodes: any[]; links: any[] } | null => {
+        if (!json.nodeList || !Array.isArray(json.nodeList)) return null
+        const typeMap: Record<string, string> = { '1': 'topEvent', '2': 'middleEvent', '3': 'basicEvent', '4': 'houseEvent', '5': 'undevelopedEvent' }
+        const gateMap: Record<string, string> = { '1': 'andGate', '2': 'orGate', '3': 'xorGate', '4': 'votingGate', '5': 'priorityAndGate', '6': 'inhibitGate', '7': 'notGate' }
+        // 先收集所有非底事件节点的 gate 类型
+        const nodeGateType = new Map<string, string>()
+        json.nodeList.forEach((n: any) => { if (n.gate) nodeGateType.set(n.id, n.gate) })
+        // 解析链接（sourceId→targetId 表示子→父）
+        const rawLinks: { childId: string; parentId: string }[] = (json.linkList || []).map((l: any) => ({
+          childId: l.sourceId, parentId: l.targetId,
+        }))
+        // 哪些节点有子节点 → 需要插入门节点
+        const childrenOfParent = new Map<string, string[]>()
+        rawLinks.forEach(l => {
+          const kids = childrenOfParent.get(l.parentId) || []
+          kids.push(l.childId)
+          childrenOfParent.set(l.parentId, kids)
+        })
+        const nodes: any[] = []
+        const links: any[] = []
+        let gateIdx = 0
+        const SCALE = 1.6
+        json.nodeList.forEach((n: any) => {
+          const eventType = typeMap[n.type] || 'basicEvent'
+          nodes.push({
+            id: n.id,
+            type: eventType,
+            position: { x: (n.x || 0) * SCALE, y: (n.y || 0) * SCALE },
+            data: {
+              label: n.name || '未命名',
+              ...(n.event?.probability ? { probability: n.event.probability } : {}),
+              ...(n.event?.description ? { description: n.event.description } : {}),
+            },
+          })
+        })
+        // 为有子节点的父节点插入门节点
+        childrenOfParent.forEach((children, parentId) => {
+          const parentNode = json.nodeList.find((n: any) => n.id === parentId)
+          const gt = parentNode?.gate || '2'
+          const gateType = gateMap[gt] || 'orGate'
+          const gateId = `gate_${gateIdx++}`
+          const pn = nodes.find(n => n.id === parentId)
+          const px = pn ? pn.position.x : 0
+          const py = pn ? pn.position.y : 0
+          nodes.push({
+            id: gateId, type: gateType,
+            position: { x: px, y: py + 70 },
+            data: { label: LABEL_MAP[gateType] || gateType.replace('Gate', '').toUpperCase() },
+          })
+          links.push({ id: `e_${links.length}`, source: parentId, target: gateId })
+          children.forEach(childId => {
+            links.push({ id: `e_${links.length}`, source: gateId, target: childId })
+          })
+        })
+        return { nodes, links }
+      }
+
+      // 通用 JSON 解析入口
+      const tryParseJson = (text: string): { nodes: any[]; links: any[] } | null => {
+        try {
+          const json = JSON.parse(text)
+          // fta-system-v1 格式
+          if (json.format === 'fta-system-v1' && json.structure) return json.structure
+          // nodeList/linkList 第三方格式
+          if (json.nodeList) return parseNodeListFormat(json)
+          // 通用 {nodes, links} 或 {nodes, edges}
+          if (json.nodes && (json.links || json.edges)) return { nodes: json.nodes, links: json.links || json.edges }
+          // {structure: {nodes, links}}
+          if (json.structure?.nodes) return json.structure
+          return null
+        } catch { return null }
+      }
+
+      // 1. 尝试 JSON
+      if (fileName.endsWith('.json')) {
+        imported = tryParseJson(content)
+        if (!imported) { message.error('JSON 格式无法识别'); return }
+      }
+
+      // 2. 尝试 XML (OpenPSA)
+      else if (fileName.endsWith('.xml') || fileName.endsWith('.opsa')) {
+        imported = parseOpenPSAXml(content)
+        if (!imported) { message.error('XML 格式无法识别，请确认为 OpenPSA MEF 格式'); return }
+      }
+
+      // 3. 其他后缀尝试自动检测
+      else {
+        imported = tryParseJson(content) || parseOpenPSAXml(content)
+        if (!imported) { message.error('无法识别的文件格式，支持 JSON / OpenPSA XML'); return }
+      }
+
+      if (!imported || imported.nodes.length === 0) {
+        message.error('文件中未找到有效的故障树节点')
+        return
+      }
+
+      // 补全节点字段
+      imported.nodes = imported.nodes.map((n: any) => ({
+        id: n.id || `n_${Math.random().toString(36).slice(2, 8)}`,
+        type: n.type || 'basicEvent',
+        position: n.position || { x: 0, y: 0 },
+        data: n.data || { label: n.label || n.name || n.id || '未命名' },
+      }))
+      imported.links = (imported.links || []).map((e: any, i: number) => ({
+        id: e.id || `e_${i}`,
+        source: e.source,
+        target: e.target,
+      }))
+
+      // 始终自动布局为树形
+      autoLayout(imported)
+
+      setNodes([])
+      setEdges([])
+      requestAnimationFrame(() => {
+        setNodes(imported.nodes)
+        requestAnimationFrame(() => { setEdges(imported.links) })
+      })
+      setCurrentTreeId(null) // 导入的是新树
+      message.success(`成功导入 ${imported.nodes.length} 个节点、${imported.links.length} 条连线`)
+
+      // 导入后自动保存为新故障树
+      setTimeout(async () => {
+        try {
+          const topNode = imported!.nodes.find((n: any) => n.type === 'topEvent')
+          const treeName = (topNode?.data as any)?.label || '导入的故障树'
+          const structure = {
+            nodes: imported!.nodes.map((n: any) => ({ id: n.id, type: n.type, position: n.position, data: n.data })),
+            links: imported!.links.map((e: any) => ({ id: e.id, source: e.source, target: e.target })),
+          }
+          const result = (await ftaApi.createFaultTree({
+            name: treeName,
+            project_id: currentProjectId,
+            structure,
+          })) as any
+          if (result.id) {
+            setCurrentTreeId(result.id)
+            navigate(`/editor/${result.id}`, { replace: true })
+            message.success('已自动保存')
+          }
+        } catch { /* 静默 */ }
+      }, 300)
+    }
+    reader.readAsText(file)
+  }
+
   const eventItems = PALETTE_ITEMS.filter(i => i.category === 'event')
   const gateItems = PALETTE_ITEMS.filter(i => i.category === 'gate')
 
   // 右键菜单项
   const contextMenuItems = contextMenu ? [
+    ...(contextMenu.nodeId ? [{ key: 'evidence', label: '查看证据', icon: <FileSearchOutlined /> }] : []),
+    ...(contextMenu.nodeId ? [{ type: 'divider' as const }] : []),
     { key: 'copy', label: '复制', icon: <CopyOutlined />, extra: 'Ctrl+C' },
     { key: 'cut', label: '剪切', icon: <ScissorOutlined />, extra: 'Ctrl+X' },
     { key: 'paste', label: '粘贴', icon: <SnippetsOutlined />, extra: 'Ctrl+V', disabled: !clipboardRef.current },
@@ -1144,14 +1952,19 @@ const EditorInner: React.FC = () => {
               AI生成
             </Button>
           </Tooltip>
-          <Tooltip title="结构校验">
+          <Tooltip title="多文档联合建树">
+            <Button icon={<ApartmentOutlined />} size="small" onClick={() => setMultiDocWizardOpen(true)} style={{ color: '#722ed1', borderColor: '#d3adf7' }}>
+              联合建树
+            </Button>
+          </Tooltip>
+          <Tooltip title="AI校验与修复">
             <Button
               icon={<CheckCircleOutlined />}
               size="small"
               loading={isValidating}
               onClick={handleValidate}
             >
-              校验
+              AI校验/修复
             </Button>
           </Tooltip>
           <div className="toolbar-divider" />
@@ -1166,20 +1979,78 @@ const EditorInner: React.FC = () => {
           <Button type="primary" icon={<SaveOutlined />} size="small" onClick={handleSave}>
             保存
           </Button>
-          <Tooltip title="导出为PNG图片">
-            <Button icon={<ExportOutlined />} size="small" onClick={handleExportImage} />
+          {lastAutoSave && <span style={{ fontSize: 10, color: '#999', marginLeft: -4 }}>自动保存 {lastAutoSave}</span>}
+          <Popover
+            trigger="click" placement="bottom"
+            title={<span style={{ fontSize: 13, fontWeight: 600 }}><SaveOutlined style={{ marginRight: 6 }} />自动保存设置</span>}
+            content={
+              <div style={{ width: 200 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                  <span style={{ fontSize: 12 }}>启用自动保存</span>
+                  <Switch size="small" checked={autoSaveEnabled} onChange={v => setAutoSaveEnabled(v)} />
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span style={{ fontSize: 12 }}>间隔(秒)</span>
+                  <Select size="small" value={autoSaveInterval} onChange={v => setAutoSaveInterval(v)} style={{ width: 90 }}
+                    options={[{ label: '30秒', value: 30 }, { label: '60秒', value: 60 }, { label: '120秒', value: 120 }, { label: '300秒', value: 300 }]} />
+                </div>
+              </div>
+            }
+          >
+            <Tooltip title="自动保存设置">
+              <Button size="small" icon={<ClockCircleOutlined />} type={autoSaveEnabled ? 'default' : 'text'}
+                style={autoSaveEnabled ? { borderColor: '#52c41a', color: '#52c41a' } : {}} />
+            </Tooltip>
+          </Popover>
+          <Tooltip title="导入故障树 (JSON / OpenPSA XML)">
+            <Button icon={<UploadOutlined />} size="small" onClick={() => importFileRef.current?.click()}>
+              导入
+            </Button>
           </Tooltip>
+          <input ref={importFileRef} type="file" accept=".json,.xml,.opsa" style={{ display: 'none' }}
+            onChange={e => { const f = e.target.files?.[0]; if (f) handleImportTree(f); e.target.value = '' }} />
+          <Dropdown menu={{ items: exportMenuItems }} trigger={['click']}>
+            <Tooltip title="导出故障树">
+              <Button icon={<ExportOutlined />} size="small">导出</Button>
+            </Tooltip>
+          </Dropdown>
+          <div className="toolbar-divider" />
+          <Tooltip title="证据追溯 — 双击节点/边查看">
+            <Button icon={<FileSearchOutlined />} size="small" loading={evidenceLoading} onClick={async () => { await loadEvidence(); message.success('证据数据已加载，双击节点或边查看详情') }}>
+              证据
+            </Button>
+          </Tooltip>
+          <Tooltip title="导出证据清单表 (CSV)">
+            <Button icon={<DownloadOutlined />} size="small" onClick={handleExportEvidenceTable} />
+          </Tooltip>
+          {docComposition && docComposition.documents?.length > 0 && (
+            <>
+              <div className="toolbar-divider" />
+              <Tooltip title="查看文档构成与贡献度">
+                <Button icon={<BranchesOutlined />} size="small" onClick={() => setDocCompositionOpen(true)} style={{ color: '#722ed1' }}>
+                  文档构成
+                </Button>
+              </Tooltip>
+            </>
+          )}
         </Space>
       </div>
 
-      <div className="fta-editor-body">
+      <div className="fta-editor-body" style={{ position: 'relative' }}>
+        {/* ---- 收起时的展开按钮 ---- */}
+        {sidebarCollapsed && (
+          <div className="fta-palette-expand-btn" onClick={() => setSidebarCollapsed(false)}
+            title="展开元件面板">
+            <RightOutlined />
+          </div>
+        )}
         {/* ---- 左侧元件面板 ---- */}
         <div className={`fta-palette ${sidebarCollapsed ? 'fta-palette-collapsed' : ''}`}>
           <div className="fta-palette-header">
             <span><AppstoreOutlined style={{ marginRight: 6 }} />元件面板</span>
-            <Button type="text" size="small" onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+            <Button type="text" size="small" onClick={() => setSidebarCollapsed(true)}
               style={{ fontSize: 11, padding: '0 4px' }}>
-              {sidebarCollapsed ? '▶' : '◀'}
+              ◀
             </Button>
           </div>
           {!sidebarCollapsed && (
@@ -1309,7 +2180,8 @@ const EditorInner: React.FC = () => {
           menu={{
             items: contextMenuItems,
             onClick: ({ key }) => {
-              if (key === 'copy') handleCopy(false)
+              if (key === 'evidence' && contextMenu?.nodeId) { handleNodeEvidence(contextMenu.nodeId); setContextMenu(null) }
+              else if (key === 'copy') handleCopy(false)
               else if (key === 'cut') handleCopy(true)
               else if (key === 'paste') handlePaste()
               else if (key === 'delete') {
@@ -1381,7 +2253,15 @@ const EditorInner: React.FC = () => {
               checked={edges.find(e => e.id === edgeContextMenu.edgeId)?.animated || false}
               onChange={(v) => { updateEdgeStyle(edgeContextMenu.edgeId, { animated: v }); }} />
           </div>
-          <div style={{ borderTop: '1px solid #f0f0f0', paddingTop: 6, marginTop: 6 }}>
+          <div style={{ borderTop: '1px solid #f0f0f0', paddingTop: 6, marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <Button size="small" block icon={<FileSearchOutlined />}
+              onClick={() => {
+                const eid = edgeContextMenu.edgeId
+                setEdgeContextMenu(null)
+                handleEdgeEvidence(eid)
+              }}>
+              查看证据
+            </Button>
             <Button size="small" danger block icon={<DeleteOutlined />}
               onClick={() => {
                 setEdges(eds => eds.filter(e => e.id !== edgeContextMenu.edgeId))
@@ -1558,60 +2438,259 @@ const EditorInner: React.FC = () => {
         />
       </Drawer>
 
-      {validationResult && !validationResult.is_valid && (
-        <div className="validation-panel">
-          <Card
-            title={
-              <span style={{ fontSize: 14 }}>
-                <CheckCircleOutlined style={{ color: 'var(--warning)', marginRight: 8 }} />
-                校验结果
-              </span>
-            }
-            size="small"
-            extra={
-              <Button type="link" size="small" onClick={() => setValidationResult(null)}>
-                关闭
-              </Button>
-            }
-          >
-            {validationResult.issues?.map((issue: any, index: number) => (
-              <div
-                key={index}
-                style={{
-                  color: issue.severity === 'ERROR' ? 'var(--danger)' : 'var(--warning)',
-                  marginBottom: 6,
-                  fontSize: 13,
-                  display: 'flex',
-                  gap: 6,
-                  alignItems: 'flex-start',
-                }}
-              >
-                <span style={{
-                  background: issue.severity === 'ERROR' ? 'rgba(239,68,68,0.1)' : 'rgba(245,158,11,0.1)',
-                  padding: '0 6px',
-                  borderRadius: 4,
-                  fontSize: 11,
-                  fontWeight: 600,
-                  flexShrink: 0,
-                }}>
-                  {issue.severity}
-                </span>
-                <span>{issue.message}</span>
-              </div>
-            ))}
-            {validationResult.suggestions?.length > 0 && (
-              <div style={{ marginTop: 12, borderTop: '1px solid var(--border-light)', paddingTop: 10 }}>
-                <div style={{ fontWeight: 600, marginBottom: 6, fontSize: 13 }}>优化建议</div>
-                {validationResult.suggestions.map((s: any, i: number) => (
-                  <div key={i} style={{ color: 'var(--primary)', marginBottom: 4, fontSize: 13 }}>
-                    {s.description}
-                  </div>
-                ))}
-              </div>
-            )}
-          </Card>
-        </div>
+      {validationResult && (
+        <ValidationPanel
+          data={validationResult}
+          onClose={() => setValidationResult(null)}
+          onLocateNode={handleLocateNode}
+          onIgnoreIssue={handleIgnoreIssue}
+          onAutoFix={handleAutoFix}
+          onRevalidate={handleValidate}
+          isFixing={isAutoFixing}
+          fixProgress={fixProgress}
+          ignoredIssues={ignoredIssues}
+        />
       )}
+
+      {/* ===== 证据追溯抽屉 ===== */}
+      <Drawer
+        title={
+          <span style={{ fontWeight: 600 }}>
+            <FileSearchOutlined style={{ marginRight: 8, color: 'var(--primary)' }} />
+            {evidenceTarget?.type === 'node' ? '节点证据追溯' : '边证据追溯'}
+          </span>
+        }
+        open={evidenceDrawerOpen}
+        onClose={() => { setEvidenceDrawerOpen(false); setEvidenceTarget(null) }}
+        width={520}
+      >
+        {currentEvidence ? (
+          <div className="fta-evidence-content">
+            {/* ---- 证据等级标签 ---- */}
+            {(() => {
+              const lvl = EVIDENCE_LEVEL_CONFIG[currentEvidence.evidence_level] || EVIDENCE_LEVEL_CONFIG.none
+              return (
+                <Alert
+                  type={currentEvidence.evidence_level === 'none' ? 'warning' : currentEvidence.evidence_level === 'single' ? 'info' : 'success'}
+                  showIcon
+                  icon={lvl.icon}
+                  message={<span style={{ fontWeight: 600 }}>证据完整度：{lvl.label}</span>}
+                  description={`共 ${(currentEvidence.sources || []).length} 条证据来源`}
+                  style={{ marginBottom: 16, borderRadius: 8 }}
+                />
+              )
+            })()}
+
+            {/* ---- 节点基础信息 ---- */}
+            {evidenceTarget?.type === 'node' && (
+              <>
+                <Descriptions column={1} size="small" bordered style={{ marginBottom: 16 }}>
+                  <Descriptions.Item label="节点名称">{currentEvidence.label}</Descriptions.Item>
+                  <Descriptions.Item label="节点类型">
+                    <Tag color="blue">{LABEL_MAP[currentEvidence.node_type] || currentEvidence.node_type}</Tag>
+                  </Descriptions.Item>
+                  {currentEvidence.last_version && (
+                    <Descriptions.Item label="最后修改">
+                      v{currentEvidence.last_version.version} · {currentEvidence.last_version.changed_by} · {currentEvidence.last_version.created_at ? new Date(currentEvidence.last_version.created_at).toLocaleString() : ''}
+                    </Descriptions.Item>
+                  )}
+                </Descriptions>
+
+                {/* ---- 逻辑门详情 ---- */}
+                {currentEvidence.gate_info && (
+                  <Card size="small" title={<><BranchesOutlined style={{ marginRight: 6, color: '#1890ff' }} />{currentEvidence.gate_info.name}</>} style={{ marginBottom: 16, borderColor: '#91d5ff' }}>
+                    <Descriptions column={1} size="small">
+                      <Descriptions.Item label="含义">{currentEvidence.gate_info.description}</Descriptions.Item>
+                      <Descriptions.Item label="逻辑公式"><code style={{ fontSize: 12, background: '#f5f5f5', padding: '2px 6px', borderRadius: 4 }}>{currentEvidence.gate_info.logic}</code></Descriptions.Item>
+                      <Descriptions.Item label="适用标准"><Tag>{currentEvidence.gate_info.standard}</Tag></Descriptions.Item>
+                      <Descriptions.Item label="使用场景">{currentEvidence.gate_info.usage}</Descriptions.Item>
+                    </Descriptions>
+                  </Card>
+                )}
+              </>
+            )}
+
+            {/* ---- 边特有信息 ---- */}
+            {evidenceTarget?.type === 'edge' && (
+              <>
+                <Descriptions column={1} size="small" bordered style={{ marginBottom: 16 }}>
+                  <Descriptions.Item label="连接">
+                    {(() => {
+                      const srcN = nodes.find(n => n.id === currentEvidence.source_node)
+                      const tgtN = nodes.find(n => n.id === currentEvidence.target_node)
+                      return `${(srcN?.data as any)?.label || currentEvidence.source_node} → ${(tgtN?.data as any)?.label || currentEvidence.target_node}`
+                    })()}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="多文档共识">
+                    {currentEvidence.is_multi_doc_consensus
+                      ? <Tag color="green"><SafetyCertificateOutlined /> 是</Tag>
+                      : <Tag>否</Tag>}
+                  </Descriptions.Item>
+                  {currentEvidence.has_conflict && (
+                    <Descriptions.Item label="冲突">
+                      <Alert type="error" message={currentEvidence.conflict_detail} showIcon style={{ padding: '4px 8px' }} />
+                    </Descriptions.Item>
+                  )}
+                </Descriptions>
+
+                {/* 逻辑门判定依据 */}
+                {currentEvidence.gate_basis && (
+                  <Card size="small" title={<><BranchesOutlined style={{ marginRight: 6, color: '#1890ff' }} />逻辑门判定依据: {currentEvidence.gate_basis.name}</>} style={{ marginBottom: 16, borderColor: '#91d5ff' }}>
+                    <Descriptions column={1} size="small">
+                      <Descriptions.Item label="含义">{currentEvidence.gate_basis.description}</Descriptions.Item>
+                      <Descriptions.Item label="逻辑公式"><code style={{ fontSize: 12, background: '#f5f5f5', padding: '2px 6px', borderRadius: 4 }}>{currentEvidence.gate_basis.logic}</code></Descriptions.Item>
+                      <Descriptions.Item label="适用标准"><Tag>{currentEvidence.gate_basis.standard}</Tag></Descriptions.Item>
+                    </Descriptions>
+                  </Card>
+                )}
+              </>
+            )}
+
+            {/* ---- 证据来源列表 ---- */}
+            <Divider orientation="left" style={{ fontSize: 13, margin: '12px 0' }}>
+              <InfoCircleOutlined style={{ marginRight: 4 }} />证据来源
+            </Divider>
+
+            {(currentEvidence.sources || []).length === 0 ? (
+              <Empty description="暂无关联证据" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+            ) : (
+              <Tabs
+                size="small"
+                items={(currentEvidence.sources || []).map((src: any, idx: number) => ({
+                  key: String(idx),
+                  label: `来源 ${idx + 1}`,
+                  children: (
+                    <div style={{ fontSize: 13 }}>
+                      {/* 节点来源 */}
+                      {evidenceTarget?.type === 'node' && (
+                        <Descriptions column={1} size="small" bordered>
+                          <Descriptions.Item label="知识实体">{src.entity_name}</Descriptions.Item>
+                          <Descriptions.Item label="实体类型"><Tag>{src.entity_type}</Tag></Descriptions.Item>
+                          <Descriptions.Item label="抽取置信度">
+                            <Progress percent={Math.round((src.confidence || 0) * 100)} size="small" style={{ width: 160 }}
+                              strokeColor={src.confidence >= 0.8 ? '#52c41a' : src.confidence >= 0.5 ? '#faad14' : '#ff4d4f'} />
+                          </Descriptions.Item>
+                          {src.document_name && (
+                            <Descriptions.Item label="来源文档">
+                              <Button type="link" size="small" icon={<FileTextOutlined />} style={{ padding: 0 }}
+                                onClick={() => handleEvidenceJump(src.document_id, src.document_name, src.chunk_id)}>
+                                {src.document_name}
+                              </Button>
+                            </Descriptions.Item>
+                          )}
+                          {src.evidence_text && (
+                            <Descriptions.Item label="来源片段">
+                              <div style={{ background: '#fafafa', padding: '8px 12px', borderRadius: 6, fontSize: 12, lineHeight: 1.8, maxHeight: 120, overflow: 'auto', border: '1px solid #f0f0f0' }}>
+                                {src.evidence_text}
+                              </div>
+                            </Descriptions.Item>
+                          )}
+                          {src.chunk_content && (
+                            <Descriptions.Item label="文档 Chunk">
+                              <div style={{ background: '#f6ffed', padding: '8px 12px', borderRadius: 6, fontSize: 12, lineHeight: 1.8, maxHeight: 120, overflow: 'auto', border: '1px solid #d9f7be' }}>
+                                {src.chunk_content}
+                              </div>
+                              <Button type="link" size="small" style={{ padding: 0, marginTop: 4 }}
+                                onClick={() => handleEvidenceJump(src.document_id, src.document_name, src.chunk_id)}>
+                                跳转到文档 →
+                              </Button>
+                            </Descriptions.Item>
+                          )}
+                        </Descriptions>
+                      )}
+                      {/* 边来源 */}
+                      {evidenceTarget?.type === 'edge' && (
+                        <Descriptions column={1} size="small" bordered>
+                          <Descriptions.Item label="关系">{src.source_entity} → {src.target_entity}</Descriptions.Item>
+                          <Descriptions.Item label="关系类型"><Tag color="purple">{src.relation_type}</Tag></Descriptions.Item>
+                          {src.logic_gate && (
+                            <Descriptions.Item label="逻辑门"><Tag color="blue">{src.logic_gate}</Tag></Descriptions.Item>
+                          )}
+                          <Descriptions.Item label="置信度">
+                            <Progress percent={Math.round((src.confidence || 0) * 100)} size="small" style={{ width: 160 }}
+                              strokeColor={src.confidence >= 0.8 ? '#52c41a' : src.confidence >= 0.5 ? '#faad14' : '#ff4d4f'} />
+                          </Descriptions.Item>
+                          {src.document_name && (
+                            <Descriptions.Item label="来源文档">
+                              <Button type="link" size="small" icon={<FileTextOutlined />} style={{ padding: 0 }}
+                                onClick={() => handleEvidenceJump(src.document_id, src.document_name)}>
+                                {src.document_name}
+                              </Button>
+                            </Descriptions.Item>
+                          )}
+                          {src.evidence_text && (
+                            <Descriptions.Item label="来源文本">
+                              <div style={{ background: '#fafafa', padding: '8px 12px', borderRadius: 6, fontSize: 12, lineHeight: 1.8, maxHeight: 120, overflow: 'auto', border: '1px solid #f0f0f0' }}>
+                                {src.evidence_text}
+                              </div>
+                            </Descriptions.Item>
+                          )}
+                        </Descriptions>
+                      )}
+                    </div>
+                  ),
+                }))}
+              />
+            )}
+          </div>
+        ) : (
+          <Empty description="暂无证据数据，请先点击工具栏「证据」按钮加载" />
+        )}
+      </Drawer>
+
+      {/* ===== 文档 Chunk 预览抽屉 ===== */}
+      <Drawer
+        title={<span style={{ fontWeight: 600 }}><FileTextOutlined style={{ marginRight: 8 }} />{chunkPreview.docName || '文档预览'}</span>}
+        open={chunkPreview.open}
+        onClose={() => setChunkPreview(p => ({ ...p, open: false }))}
+        width={480}
+      >
+        {chunkPreview.chunks.length === 0 ? (
+          <Empty description="该文档暂无分块数据" />
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {chunkPreview.chunks.map((c: any) => (
+              <Card
+                key={c.id}
+                size="small"
+                title={<span style={{ fontSize: 12 }}>Chunk #{c.chunk_index} <Tag style={{ fontSize: 11 }}>{c.chunk_type}</Tag></span>}
+                style={{
+                  borderColor: c.id === chunkPreview.highlightChunkId ? '#1890ff' : '#f0f0f0',
+                  background: c.id === chunkPreview.highlightChunkId ? '#e6f7ff' : '#fff',
+                }}
+                id={`chunk-${c.id}`}
+              >
+                <div style={{ fontSize: 12, lineHeight: 1.8, whiteSpace: 'pre-wrap', maxHeight: 200, overflow: 'auto' }}>
+                  {c.content}
+                </div>
+              </Card>
+            ))}
+          </div>
+        )}
+      </Drawer>
+
+      {/* ===== 节点属性面板 ===== */}
+      <NodePropertyPanel
+        open={propertyPanelOpen}
+        node={propertyPanelNode}
+        onClose={() => setPropertyPanelOpen(false)}
+        onChange={handleNodePropertyChange}
+      />
+
+      {/* ===== 多文档联合建树向导 ===== */}
+      <MultiDocWizard
+        open={multiDocWizardOpen}
+        projectId={currentProjectId}
+        onClose={() => setMultiDocWizardOpen(false)}
+        onGenerated={handleMultiDocGenerated}
+      />
+
+      {/* ===== 文档构成与贡献度面板 ===== */}
+      <DocCompositionPanel
+        open={docCompositionOpen}
+        onClose={() => setDocCompositionOpen(false)}
+        composition={docComposition}
+      />
     </div>
   )
 }

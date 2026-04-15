@@ -10,9 +10,10 @@ import {
   TeamOutlined,
   CopyOutlined,
   UserOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
-import { projectApi, collabApi } from '@/services/api'
+import { projectApi, collabApi, demoApi } from '@/services/api'
 import useAuthStore from '@/stores/authStore'
 
 const { Text } = Typography
@@ -72,8 +73,9 @@ const Projects: React.FC = () => {
           await projectApi.deleteProject(id)
           message.success('删除成功')
           loadProjects()
-        } catch (error) {
-          message.error('删除失败')
+        } catch (error: any) {
+          const detail = error?.response?.data?.detail || error?.message || '未知错误'
+          message.error(`删除失败: ${detail}`)
         }
       },
     })
@@ -140,14 +142,31 @@ const Projects: React.FC = () => {
           <h2>项目管理</h2>
           <p>管理你的故障树分析项目</p>
         </div>
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          size="large"
-          onClick={() => openEditModal()}
-        >
-          新建项目
-        </Button>
+        <div style={{ display: 'flex', gap: 12 }}>
+          <Tooltip title="一键创建液压系统/电气系统/制动系统等预设示例项目">
+            <Button
+              icon={<ThunderboltOutlined />}
+              size="large"
+              onClick={async () => {
+                try {
+                  const res: any = await demoApi.seedDemoData()
+                  message.success(res.message || '演示数据创建成功')
+                  loadProjects()
+                } catch { message.error('创建演示数据失败') }
+              }}
+            >
+              创建演示项目
+            </Button>
+          </Tooltip>
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            size="large"
+            onClick={() => openEditModal()}
+          >
+            新建项目
+          </Button>
+        </div>
       </div>
 
       {loading ? (

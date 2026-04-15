@@ -9,6 +9,8 @@ import Projects from './pages/Projects'
 import Settings from './pages/Settings'
 import Login from './pages/Login'
 import Collaboration from './pages/Collaboration'
+import ExpertMode from './pages/ExpertMode'
+import Benchmark from './pages/Benchmark'
 import useAuthStore from './stores/authStore'
 import './styles/App.css'
 
@@ -35,6 +37,8 @@ const AuthLayout: React.FC = () => {
             <Route path="/editor/:treeId" element={<Editor />} />
             <Route path="/knowledge" element={<Knowledge />} />
             <Route path="/collaboration" element={<Collaboration />} />
+            <Route path="/expert" element={<ExpertMode />} />
+            <Route path="/benchmark" element={<Benchmark />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="*" element={<Navigate to="/projects" replace />} />
           </Routes>

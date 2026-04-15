@@ -112,6 +112,14 @@ async def start_extraction(
                             project_id=d.project_id,
                             source_document_id=d.id,
                             evidence=ent.evidence,
+                            fault_code=ent.fault_code or None,
+                            fault_mode=ent.fault_mode or None,
+                            severity=ent.severity or None,
+                            detection_method=ent.detection_method or None,
+                            parameter_name=ent.parameter_name or None,
+                            parameter_range=ent.parameter_range or None,
+                            maintenance_ref=ent.maintenance_ref or None,
+                            evidence_level=ent.evidence_level or None,
                         )
                         session.add(ke)
                         await session.flush()  # 获取 id
@@ -131,6 +139,8 @@ async def start_extraction(
                                 evidence=rel.evidence,
                                 project_id=d.project_id,
                                 source_document_id=d.id,
+                                condition=rel.condition or None,
+                                parameters=rel.parameters,
                             ))
 
                     # 存抽取记录
@@ -200,6 +210,14 @@ async def extract_from_text(
                 confidence=ent.confidence,
                 project_id=request.project_id,
                 evidence=ent.evidence,
+                fault_code=ent.fault_code or None,
+                fault_mode=ent.fault_mode or None,
+                severity=ent.severity or None,
+                detection_method=ent.detection_method or None,
+                parameter_name=ent.parameter_name or None,
+                parameter_range=ent.parameter_range or None,
+                maintenance_ref=ent.maintenance_ref or None,
+                evidence_level=ent.evidence_level or None,
             )
             db.add(ke)
             await db.flush()
@@ -217,6 +235,8 @@ async def extract_from_text(
                     confidence=rel.confidence,
                     evidence=rel.evidence,
                     project_id=request.project_id,
+                    condition=rel.condition or None,
+                    parameters=rel.parameters,
                 ))
         await db.commit()
 
