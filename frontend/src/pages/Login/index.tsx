@@ -4,6 +4,7 @@ import { UserOutlined, LockOutlined, MailOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { authApi } from '@/services/api'
 import useAuthStore from '@/stores/authStore'
+import logoImg from '@/assets/logo.png'
 
 const Login: React.FC = () => {
   const navigate = useNavigate()
@@ -90,22 +91,16 @@ const Login: React.FC = () => {
       }}>
         {/* Logo */}
         <div style={{ textAlign: 'center', marginBottom: 28 }}>
-          <div style={{
-            width: 56,
-            height: 56,
-            borderRadius: 16,
-            background: 'linear-gradient(135deg, #818cf8, #06b6d4)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            margin: '0 auto 16px',
-            boxShadow: '0 8px 24px rgba(79,70,229,0.3)',
-          }}>
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
-              <path d="M12 2L4 7V12C4 16.42 7.4 20.56 12 22C16.6 20.56 20 16.42 20 12V7L12 2Z" fill="white" fillOpacity="0.9" />
-              <path d="M12 6L8 10H11V16H13V10H16L12 6Z" fill="rgba(79,70,229,0.7)" />
-            </svg>
-          </div>
+          <img
+            src={logoImg}
+            alt="FTA Logo"
+            style={{
+              height: 60,
+              width: 'auto',
+              margin: '0 auto 12px',
+              display: 'block',
+            }}
+          />
           <h2 style={{ fontSize: 22, fontWeight: 700, margin: 0, color: '#1e293b' }}>
             FTA 智能生成系统
           </h2>

@@ -167,33 +167,52 @@ class KnowledgeExtractor:
         self,
         file_path: str,
         doc_type: str,
+        progress_callback=None,
     ) -> ExtractionResult:
         """
         端到端抽取：解析文档 → 分块 → LLM 抽取 → 去重合并
         """
+        def _progress(msg: str):
+            print(f"[KnowledgeExtractor] {msg}")
+            if progress_callback:
+                try:
+                    progress_callback(msg)
+                except Exception:
+                    pass
+
         # 1. 文档解析
+        _progress("解析文档...")
         parser = DocumentParserFactory.get_parser(doc_type)
         document = await parser.parse(file_path)
 
         if not document.text.strip():
+            _progress("文档内容为空")
             return ExtractionResult([], [], [], 0.0, {"error": "文档内容为空"})
+
+        _progress(f"文档解析完成，共 {len(document.text)} 字符")
 
         # 2. 文本分块
         chunks = split_text_into_chunks(document.text, chunk_size=1500, chunk_overlap=200)
         if not chunks:
+            _progress("分块为空")
             return ExtractionResult([], [], [], 0.0, {"error": "分块为空"})
+
+        _progress(f"文本分块完成，共 {len(chunks)} 个块")
 
         # 3. 逐块 LLM 抽取
         all_entities: List[ExtractedEntity] = []
         all_relations: List[ExtractedRelation] = []
 
-        for chunk in chunks:
+        for i, chunk in enumerate(chunks):
             try:
+                _progress(f"LLM抽取中 {i+1}/{len(chunks)}...")
                 ents, rels = await self._extract_from_chunk(chunk)
                 all_entities.extend(ents)
                 all_relations.extend(rels)
+                _progress(f"块 {i+1}/{len(chunks)} 完成: {len(ents)} 实体, {len(rels)} 关系")
             except Exception as e:
-                print(f"[KnowledgeExtractor] chunk extraction error: {e}")
+                _progress(f"块 {i+1}/{len(chunks)} 失败: {e}")
+                print(f"[KnowledgeExtractor] chunk {i+1} extraction error: {e}")
 
         # 4. 去重 & 合并
         merged_entities = self._merge_entities(all_entities)

@@ -69,110 +69,154 @@ async def start_extraction(
         "current_doc": docs[0].filename if docs else "",
         "status": "processing",
         "details": [],
+        "chunk_progress": "",  # 分块级进度提示
     }
 
     # ---- 后台异步抽取 ----
     async def _run(document_ids: List[int], tid: str):
-        async with AsyncSessionLocal() as session:
-            extractor = KnowledgeExtractor()
-            for idx, d_id in enumerate(document_ids):
-                res = await session.execute(select(Document).where(Document.id == d_id))
-                d = res.scalar_one_or_none()
-                if not d or not d.file_path:
-                    extraction_progress[tid]["completed"] = idx + 1
-                    continue
-                try:
-                    extraction_progress[tid]["current_doc"] = d.filename
-                    ext_result = await extractor.extract_from_document(d.file_path, d.doc_type)
+        import traceback
+        try:
+            async with AsyncSessionLocal() as session:
+                extractor = KnowledgeExtractor()
+                for idx, d_id in enumerate(document_ids):
+                    res = await session.execute(select(Document).where(Document.id == d_id))
+                    d = res.scalar_one_or_none()
+                    if not d or not d.file_path:
+                        extraction_progress[tid]["completed"] = idx + 1
+                        extraction_progress[tid]["details"].append(
+                            {"doc_id": d_id, "filename": "", "status": "failed", "error": "文档不存在或无文件路径"})
+                        continue
 
-                    # 存抽取结果到 Document
-                    d.extraction_result = ext_result.to_dict()
-                    d.extraction_status = "completed"
-                    d.content_text = "\n".join(ext_result.text_chunks[:10])  # 保存前几块摘要
-
-                    # 存 RAG 分块
-                    for i, chunk_text in enumerate(ext_result.text_chunks):
-                        session.add(DocumentChunk(
-                            document_id=d.id,
-                            chunk_index=i,
-                            content=chunk_text,
-                            chunk_type="text",
-                            project_id=d.project_id,
-                        ))
-
-                    # 存知识实体
-                    name_to_entity = {}
-                    for ent in ext_result.entities:
-                        ke = KnowledgeEntity(
-                            name=ent.name,
-                            entity_type=ent.entity_type,
-                            description=ent.description,
-                            device_type=ent.device_type,
-                            confidence=ent.confidence,
-                            project_id=d.project_id,
-                            source_document_id=d.id,
-                            evidence=ent.evidence,
-                            fault_code=ent.fault_code or None,
-                            fault_mode=ent.fault_mode or None,
-                            severity=ent.severity or None,
-                            detection_method=ent.detection_method or None,
-                            parameter_name=ent.parameter_name or None,
-                            parameter_range=ent.parameter_range or None,
-                            maintenance_ref=ent.maintenance_ref or None,
-                            evidence_level=ent.evidence_level or None,
+                    # 检查文件是否存在（兼容相对路径）
+                    import os as _os
+                    fpath = d.file_path
+                    if not _os.path.isabs(fpath):
+                        fpath = _os.path.join(
+                            _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+                            "..", fpath
                         )
-                        session.add(ke)
-                        await session.flush()  # 获取 id
-                        name_to_entity[ent.name.strip().lower()] = ke
+                        fpath = _os.path.abspath(fpath)
+                        print(f"[Extraction] 相对路径已转换: {d.file_path} -> {fpath}")
+                        d.file_path = fpath  # 顺便修正DB中的路径
+                    if not _os.path.exists(fpath):
+                        print(f"[Extraction] 文件不存在: {d.file_path}")
+                        d.extraction_status = "failed"
+                        d.extraction_result = {"error": f"文件不存在: {d.file_path}"}
+                        await session.commit()
+                        extraction_progress[tid]["completed"] = idx + 1
+                        extraction_progress[tid]["details"].append(
+                            {"doc_id": d_id, "filename": d.filename, "status": "failed", "error": "文件不存在"})
+                        continue
 
-                    # 存知识关系
-                    for rel in ext_result.relations:
-                        src = name_to_entity.get(rel.source_name.strip().lower())
-                        tgt = name_to_entity.get(rel.target_name.strip().lower())
-                        if src and tgt:
-                            session.add(KnowledgeRelation(
-                                source_entity_id=src.id,
-                                target_entity_id=tgt.id,
-                                relation_type=rel.relation_type,
-                                logic_gate=rel.logic_gate or None,
-                                confidence=rel.confidence,
-                                evidence=rel.evidence,
+                    try:
+                        extraction_progress[tid]["current_doc"] = d.filename
+                        extraction_progress[tid]["chunk_progress"] = "解析文档..."
+                        print(f"[Extraction] 开始处理文档 {d.id}: {d.filename} (path={fpath})")
+
+                        ext_result = await extractor.extract_from_document(
+                            fpath, d.doc_type,
+                            progress_callback=lambda msg: extraction_progress[tid].__setitem__("chunk_progress", msg),
+                        )
+
+                        # 存抽取结果到 Document
+                        d.extraction_result = ext_result.to_dict()
+                        d.extraction_status = "completed"
+                        d.content_text = "\n".join(ext_result.text_chunks[:10])  # 保存前几块摘要
+
+                        # 存 RAG 分块
+                        for i, chunk_text in enumerate(ext_result.text_chunks):
+                            session.add(DocumentChunk(
+                                document_id=d.id,
+                                chunk_index=i,
+                                content=chunk_text,
+                                chunk_type="text",
                                 project_id=d.project_id,
-                                source_document_id=d.id,
-                                condition=rel.condition or None,
-                                parameters=rel.parameters,
                             ))
 
-                    # 存抽取记录
-                    session.add(ExtractionRecord(
-                        document_id=d.id,
-                        extraction_type="knowledge",
-                        entities_extracted=len(ext_result.entities),
-                        relations_extracted=len(ext_result.relations),
-                        quality_score=ext_result.quality_score,
-                        details=ext_result.statistics,
-                    ))
+                        # 存知识实体
+                        name_to_entity = {}
+                        for ent in ext_result.entities:
+                            ke = KnowledgeEntity(
+                                name=ent.name,
+                                entity_type=ent.entity_type,
+                                description=ent.description,
+                                device_type=ent.device_type,
+                                confidence=ent.confidence,
+                                project_id=d.project_id,
+                                source_document_id=d.id,
+                                evidence=ent.evidence,
+                                fault_code=ent.fault_code or None,
+                                fault_mode=ent.fault_mode or None,
+                                severity=ent.severity or None,
+                                detection_method=ent.detection_method or None,
+                                parameter_name=ent.parameter_name or None,
+                                parameter_range=ent.parameter_range or None,
+                                maintenance_ref=ent.maintenance_ref or None,
+                                evidence_level=ent.evidence_level or None,
+                            )
+                            session.add(ke)
+                            await session.flush()  # 获取 id
+                            name_to_entity[ent.name.strip().lower()] = ke
 
-                    await session.commit()
-                    extraction_progress[tid]["completed"] = idx + 1
-                    extraction_progress[tid]["details"].append(
-                        {"doc_id": d.id, "filename": d.filename, "status": "completed",
-                         "entities": len(ext_result.entities), "relations": len(ext_result.relations)}
-                    )
-                    print(f"[Extraction] 文档 {d.id} 完成: {len(ext_result.entities)} 实体, {len(ext_result.relations)} 关系")
+                        # 存知识关系
+                        for rel in ext_result.relations:
+                            src = name_to_entity.get(rel.source_name.strip().lower())
+                            tgt = name_to_entity.get(rel.target_name.strip().lower())
+                            if src and tgt:
+                                session.add(KnowledgeRelation(
+                                    source_entity_id=src.id,
+                                    target_entity_id=tgt.id,
+                                    relation_type=rel.relation_type,
+                                    logic_gate=rel.logic_gate or None,
+                                    confidence=rel.confidence,
+                                    evidence=rel.evidence,
+                                    project_id=d.project_id,
+                                    source_document_id=d.id,
+                                    condition=rel.condition or None,
+                                    parameters=rel.parameters,
+                                ))
 
-                except Exception as e:
-                    print(f"[Extraction] 文档 {d_id} 失败: {e}")
-                    d.extraction_status = "failed"
-                    d.extraction_result = {"error": str(e)}
-                    await session.commit()
-                    extraction_progress[tid]["completed"] = idx + 1
-                    extraction_progress[tid]["details"].append(
-                        {"doc_id": d_id, "filename": d.filename if d else "", "status": "failed", "error": str(e)}
-                    )
+                        # 存抽取记录
+                        session.add(ExtractionRecord(
+                            document_id=d.id,
+                            extraction_type="knowledge",
+                            entities_extracted=len(ext_result.entities),
+                            relations_extracted=len(ext_result.relations),
+                            quality_score=ext_result.quality_score,
+                            details=ext_result.statistics,
+                        ))
 
+                        await session.commit()
+                        extraction_progress[tid]["completed"] = idx + 1
+                        extraction_progress[tid]["chunk_progress"] = ""
+                        extraction_progress[tid]["details"].append(
+                            {"doc_id": d.id, "filename": d.filename, "status": "completed",
+                             "entities": len(ext_result.entities), "relations": len(ext_result.relations)}
+                        )
+                        print(f"[Extraction] 文档 {d.id} 完成: {len(ext_result.entities)} 实体, {len(ext_result.relations)} 关系")
+
+                    except Exception as e:
+                        print(f"[Extraction] 文档 {d_id} 失败: {e}\n{traceback.format_exc()}")
+                        d.extraction_status = "failed"
+                        d.extraction_result = {"error": str(e)}
+                        await session.commit()
+                        extraction_progress[tid]["completed"] = idx + 1
+                        extraction_progress[tid]["chunk_progress"] = ""
+                        extraction_progress[tid]["details"].append(
+                            {"doc_id": d_id, "filename": d.filename if d else "", "status": "failed", "error": str(e)}
+                        )
+
+                extraction_progress[tid]["status"] = "completed"
+                extraction_progress[tid]["current_doc"] = ""
+                extraction_progress[tid]["chunk_progress"] = ""
+
+        except Exception as e:
+            print(f"[Extraction] 任务 {tid} 顶层异常: {e}\n{traceback.format_exc()}")
             extraction_progress[tid]["status"] = "completed"
             extraction_progress[tid]["current_doc"] = ""
+            extraction_progress[tid]["chunk_progress"] = f"任务异常: {e}"
+            extraction_progress[tid]["details"].append(
+                {"doc_id": 0, "filename": "", "status": "failed", "error": f"任务异常: {e}"})
 
     asyncio.create_task(_run([d.id for d in docs], task_id))
 

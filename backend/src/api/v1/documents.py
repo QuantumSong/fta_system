@@ -90,7 +90,7 @@ async def upload_document(
     # 保存文件到磁盘
     import uuid
     safe_filename = f"{uuid.uuid4().hex}_{file.filename}"
-    file_path = os.path.join(settings.UPLOAD_DIR, safe_filename)
+    file_path = os.path.join(upload_path, safe_filename)
 
     async with aiofiles.open(file_path, "wb") as f:
         await f.write(content)

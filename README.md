@@ -133,56 +133,57 @@
 
 ```
 fta-system/
-├── backend/                      # Python 后端服务
+├── backend/                       # Python 后端服务
 │   ├── src/
-│   │   ├── api/v1/               # REST API 路由
-│   │   │   ├── auth.py           # 用户认证（注册/登录/管理）
-│   │   │   ├── projects.py       # 项目管理 CRUD
-│   │   │   ├── fta.py            # 故障树 CRUD + AI 生成 + 证据追溯
-│   │   │   ├── knowledge.py      # 知识实体/关系/图谱可视化
-│   │   │   ├── documents.py      # 文档上传与管理
-│   │   │   ├── extraction.py     # LLM 知识抽取
-│   │   │   ├── validation.py     # 五维度校验 + AI 修复
-│   │   │   ├── benchmark.py      # 基准评测（标准树对比 + AI 评测）
-│   │   │   ├── expert.py         # 专家规则 CRUD
-│   │   │   ├── multidoc.py       # 多文档联合建树
-│   │   │   ├── collaboration.py  # 协作管理
-│   │   │   └── ws.py             # WebSocket 实时同步
-│   │   ├── models/               # SQLAlchemy ORM 数据模型
+│   │   ├── api/v1/                # REST API 路由
+│   │   │   ├── auth.py            # 用户认证（注册/登录/管理）
+│   │   │   ├── projects.py        # 项目管理 CRUD
+│   │   │   ├── fta.py             # 故障树 CRUD + AI 生成 + 证据追溯
+│   │   │   ├── knowledge.py       # 知识实体/关系/图谱可视化
+│   │   │   ├── documents.py       # 文档上传与管理
+│   │   │   ├── extraction.py      # LLM 知识抽取
+│   │   │   ├── validation.py      # 五维度校验 + AI 修复
+│   │   │   ├── benchmark.py       # 基准评测（标准树对比 + AI 评测）
+│   │   │   ├── expert.py          # 专家规则 CRUD
+│   │   │   ├── multidoc.py        # 多文档联合建树
+│   │   │   ├── collaboration.py   # 协作管理
+│   │   │   └── ws.py              # WebSocket 实时同步
+│   │   ├── models/                # SQLAlchemy ORM 数据模型
 │   │   ├── services/
-│   │   │   ├── generation/       # 故障树生成引擎（KG+RAG+LLM 融合）
-│   │   │   ├── validation/       # 领域化逻辑校验器（20+ 规则）
-│   │   │   ├── evaluation/       # 评测引擎（节点对齐 + 指标计算）
-│   │   │   ├── extraction/       # 知识抽取流水线
-│   │   │   └── rag/              # RAG 检索服务（TF-IDF + 知识子图）
-│   │   ├── schemas/              # 工业领域 Schema 定义
-│   │   ├── core/                 # LLM 客户端、认证、数据库
-│   │   ├── config.py             # 配置管理
-│   │   └── main.py               # 应用入口
+│   │   │   ├── generation/        # 故障树生成引擎（KG+RAG+LLM 融合）
+│   │   │   ├── validation/        # 领域化逻辑校验器（20+ 规则）
+│   │   │   ├── evaluation/        # 评测引擎（节点对齐 + 指标计算）
+│   │   │   ├── extraction/        # 知识抽取流水线
+│   │   │   └── rag/               # RAG 检索服务（TF-IDF + 知识子图）
+│   │   ├── schemas/               # 工业领域 Schema 定义
+│   │   ├── core/                  # LLM 客户端、认证、数据库
+│   │   ├── config.py              # 配置管理
+│   │   └── main.py                # 应用入口
 │   ├── requirements.txt
 │   └── .env.example
 │
-├── frontend/                     # React 前端应用
+├── frontend/                      # React 前端应用
 │   ├── src/
 │   │   ├── pages/
-│   │   │   ├── Editor/           # 故障树可视化编辑器（ReactFlow）
-│   │   │   ├── Knowledge/        # 知识图谱 + 文档管理 + 实体管理
-│   │   │   ├── Benchmark/        # 基准评测仪表盘
-│   │   │   ├── ExpertMode/       # 专家规则管理
-│   │   │   ├── Projects/         # 项目管理
-│   │   │   ├── Settings/         # 系统设置
-│   │   │   ├── Login/            # 登录/注册
-│   │   │   └── Collaboration/    # 协作加入
+│   │   │   ├── Editor/            # 故障树可视化编辑器（ReactFlow）
+│   │   │   ├── Knowledge/         # 知识图谱 + 文档管理 + 实体管理
+│   │   │   ├── Benchmark/         # 基准评测仪表盘
+│   │   │   ├── ExpertMode/        # 专家规则管理
+│   │   │   ├── Projects/          # 项目管理
+│   │   │   ├── Settings/          # 系统设置
+│   │   │   ├── Login/             # 登录/注册
+│   │   │   └── Collaboration/     # 协作加入
 │   │   ├── components/
-│   │   │   ├── nodes/            # 自定义故障树节点组件（7 种类型）
-│   │   │   └── ValidationPanel/  # 校验结果面板
-│   │   ├── services/api.ts       # 统一 API 客户端
-│   │   ├── schemas/              # 工业 Schema 前端定义
-│   │   ├── stores/               # Zustand 状态管理
-│   │   └── hooks/                # 自定义 Hooks（协作 WebSocket 等）
+│   │   │   ├── nodes/             # 自定义故障树节点组件（7 种类型）
+│   │   │   └── ValidationPanel/   # 校验结果面板
+│   │   ├── services/api.ts        # 统一 API 客户端
+│   │   ├── schemas/               # 工业 Schema 前端定义
+│   │   ├── stores/                # Zustand 状态管理
+│   │   └── hooks/                 # 自定义 Hooks（协作 WebSocket 等）
 │   ├── package.json
 │   └── vite.config.ts
 │
+├── fta-system.ico                 # 项目图标
 ├── LICENSE
 └── README.md
 ```

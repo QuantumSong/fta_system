@@ -547,9 +547,11 @@ const Knowledge: React.FC = () => {
       setExtractionTaskId(taskId)
       message.success('抽取任务已启动')
       // 轮询进度
+      let pollFailCount = 0
       const poll = setInterval(async () => {
         try {
           const prog: any = await extractionApi.getExtractionProgress(taskId)
+          pollFailCount = 0  // 成功则重置
           setExtractionProgress(prog)
           if (prog.status === 'completed') {
             clearInterval(poll)
@@ -558,11 +560,26 @@ const Knowledge: React.FC = () => {
             loadDocuments()
             const succeeded = (prog.details || []).filter((d: any) => d.status === 'completed').length
             const failed = (prog.details || []).filter((d: any) => d.status === 'failed').length
-            message.success(`知识抽取完成: ${succeeded} 成功${failed ? `, ${failed} 失败` : ''}`)
+            if (failed > 0 && succeeded === 0) {
+              const errMsg = (prog.details || []).find((d: any) => d.error)?.error || '未知错误'
+              message.error(`知识抽取失败: ${errMsg}`)
+            } else {
+              message.success(`知识抽取完成: ${succeeded} 成功${failed ? `, ${failed} 失败` : ''}`)
+            }
             // 自动刷新实体列表
             loadEntities()
           }
-        } catch { /* ignore */ }
+        } catch {
+          pollFailCount++
+          if (pollFailCount >= 5) {
+            clearInterval(poll)
+            setExtracting(false)
+            setExtractionTaskId(null)
+            setExtractionProgress(null)
+            message.error('抽取任务状态查询失败，请刷新页面重试')
+            loadDocuments()
+          }
+        }
       }, 2000)
     } catch { message.error('启动抽取失败'); setExtracting(false); setExtractionProgress(null) }
   }
@@ -867,6 +884,11 @@ const Knowledge: React.FC = () => {
                     </span>
                     <span>{extractionProgress.completed} / {extractionProgress.total}</span>
                   </div>
+                  {(extractionProgress as any).chunk_progress && (
+                    <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
+                      {(extractionProgress as any).chunk_progress}
+                    </div>
+                  )}
                   <Progress
                     percent={extractionProgress.total > 0 ? Math.round((extractionProgress.completed / extractionProgress.total) * 100) : 0}
                     status="active"
